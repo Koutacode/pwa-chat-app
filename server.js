@@ -11,14 +11,15 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const path = require('path');
+
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
 // Serve static assets from the public directory
-app.use(express.static('public'));
-
+app.use(express.static(__dirname));
 // Map of room names to array of socket IDs; used for group chat and voice calls
 const rooms = new Map();
 
