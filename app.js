@@ -8,26 +8,93 @@
 
 (() => {
   const socket = io();
+  const ROOM = 'global';
   const messagesEl = document.getElementById('messages');
   const inputEl = document.getElementById('input');
   const sendBtn = document.getElementById('send');
   const shareLocationBtn = document.getElementById('shareLocation');
   const startCallBtn = document.getElementById('startCall');
   const endCallBtn = document.getElementById('endCall');
-  const localVideoContainer = document.getElementById('localVideo');
-  const remoteVideoContainer = document.getElementById('remoteVideo');
+  const participantListEl = document.getElementById('participantList');
+  const audioContainer = document.getElementById('audioElements');
   const iconInput = document.getElementById('iconInput');
   const iconPreview = document.getElementById('iconPreview');
 
   const userName = prompt('ユーザー名を入力してください', 'ユーザー' + Math.floor(Math.random() * 1000));
   let userIcon = localStorage.getItem('userIcon') || null;
+  let inCall = false;
+  let localAudioEl = null;
+  let remoteAudioEl = null;
+
+  function renderParticipants(participants) {
+    participantListEl.innerHTML = '';
+    if (!Array.isArray(participants) || participants.length === 0) {
+      const emptyItem = document.createElement('li');
+      emptyItem.className = 'empty';
+      emptyItem.textContent = '現在、通話に参加しているユーザーはいません。';
+      participantListEl.appendChild(emptyItem);
+      return;
+    }
+
+    participants.forEach(({ id, user, icon }) => {
+      const item = document.createElement('li');
+      const avatar = document.createElement('img');
+      avatar.src = icon || 'icon-192.png';
+      avatar.alt = `${user || 'ユーザー'}のアイコン`;
+      item.appendChild(avatar);
+      const name = document.createElement('span');
+      if (id === socket.id) {
+        name.textContent = `${user || 'ゲスト'} (自分)`;
+        name.className = 'self';
+      } else {
+        name.textContent = user || 'ゲスト';
+      }
+      item.appendChild(name);
+      participantListEl.appendChild(item);
+    });
+  }
+
+  renderParticipants([]);
+
+  function updateCallParticipation(action) {
+    socket.emit('call-participation', {
+      room: ROOM,
+      action,
+      user: userName,
+      icon: userIcon || null,
+    });
+  }
+
+  function attachAudioElement(stream, { muted } = {}) {
+    const audioEl = document.createElement('audio');
+    audioEl.autoplay = true;
+    audioEl.muted = Boolean(muted);
+    audioEl.srcObject = stream;
+    audioContainer.appendChild(audioEl);
+    const playPromise = audioEl.play();
+    if (playPromise && typeof playPromise.catch === 'function') {
+      playPromise.catch(() => {
+        // Autoplay might fail due to browser policies; ignore silently.
+      });
+    }
+    return audioEl;
+  }
+
+  function cleanupAudioElement(el) {
+    if (!el) return;
+    el.pause();
+    el.srcObject = null;
+    if (el.parentElement) {
+      el.parentElement.removeChild(el);
+    }
+  }
 
   if (userIcon) {
     iconPreview.src = userIcon;
   }
 
   // Join the default room
-  socket.emit('join', 'global');
+  socket.emit('join', { room: ROOM, user: userName, icon: userIcon || null });
 
   function addMessage({ user, text, time, icon, location }) {
     const li = document.createElement('li');
@@ -92,6 +159,9 @@
       } catch (err) {
         console.warn('Failed to persist user icon to localStorage:', err);
       }
+      if (inCall) {
+        updateCallParticipation('update');
+      }
     };
     reader.readAsDataURL(file);
   });
@@ -100,7 +170,7 @@
   sendBtn.addEventListener('click', () => {
     const text = inputEl.value.trim();
     if (text) {
-      socket.emit('message', { user: userName, text, room: 'global', icon: userIcon });
+      socket.emit('message', { user: userName, text, room: ROOM, icon: userIcon });
       inputEl.value = '';
     }
   });
@@ -120,6 +190,10 @@
     addMessage({ user: 'system', text: msg, time: Date.now() });
   });
 
+  socket.on('call-participants', (participants) => {
+    renderParticipants(participants);
+  });
+
   shareLocationBtn.addEventListener('click', () => {
     if (!navigator.geolocation) {
       alert('お使いのブラウザでは位置情報を利用できません。');
@@ -131,7 +205,7 @@
         const { latitude, longitude } = position.coords;
         socket.emit('message', {
           user: userName,
-          room: 'global',
+          room: ROOM,
           icon: userIcon,
           text: '位置情報を共有しました。',
           location: { latitude, longitude },
@@ -167,35 +241,31 @@
       endCallBtn.disabled = true;
       return;
     }
-    // Show local stream (audio only; we display but no video)
-    const localAudio = document.createElement('audio');
-    localAudio.srcObject = localStream;
-    localAudio.muted = true;
-    localAudio.autoplay = true;
-    localVideoContainer.innerHTML = '';
-    localVideoContainer.appendChild(localAudio);
+    cleanupAudioElement(localAudioEl);
+    localAudioEl = attachAudioElement(localStream, { muted: true });
     // Create peer connection
     peerConnection = new RTCPeerConnection(iceServers);
     localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
     // When remote track arrives, play it
     peerConnection.addEventListener('track', (event) => {
       const [remoteStream] = event.streams;
-      const remoteAudio = document.createElement('audio');
-      remoteAudio.srcObject = remoteStream;
-      remoteAudio.autoplay = true;
-      remoteVideoContainer.innerHTML = '';
-      remoteVideoContainer.appendChild(remoteAudio);
+      if (!remoteStream) return;
+      cleanupAudioElement(remoteAudioEl);
+      remoteAudioEl = attachAudioElement(remoteStream);
     });
     // ICE candidates
     peerConnection.addEventListener('icecandidate', (event) => {
       if (event.candidate) {
-        socket.emit('webrtc', { room: 'global', data: { type: 'candidate', candidate: event.candidate } });
+        socket.emit('webrtc', { room: ROOM, data: { type: 'candidate', candidate: event.candidate } });
       }
     });
     // Create and send offer
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
-    socket.emit('webrtc', { room: 'global', data: { type: 'offer', sdp: offer } });
+    socket.emit('webrtc', { room: ROOM, data: { type: 'offer', sdp: offer } });
+    const action = inCall ? 'update' : 'join';
+    inCall = true;
+    updateCallParticipation(action);
   }
 
   async function handleOffer(sdp) {
@@ -204,15 +274,13 @@
       // When remote track arrives
       peerConnection.addEventListener('track', (event) => {
         const [remoteStream] = event.streams;
-        const remoteAudio = document.createElement('audio');
-        remoteAudio.srcObject = remoteStream;
-        remoteAudio.autoplay = true;
-        remoteVideoContainer.innerHTML = '';
-        remoteVideoContainer.appendChild(remoteAudio);
+        if (!remoteStream) return;
+        cleanupAudioElement(remoteAudioEl);
+        remoteAudioEl = attachAudioElement(remoteStream);
       });
       peerConnection.addEventListener('icecandidate', (event) => {
         if (event.candidate) {
-          socket.emit('webrtc', { room: 'global', data: { type: 'candidate', candidate: event.candidate } });
+          socket.emit('webrtc', { room: ROOM, data: { type: 'candidate', candidate: event.candidate } });
         }
       });
       // Get local audio stream when answering
@@ -223,19 +291,18 @@
         return;
       }
       localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
-      const localAudio = document.createElement('audio');
-      localAudio.srcObject = localStream;
-      localAudio.muted = true;
-      localAudio.autoplay = true;
-      localVideoContainer.innerHTML = '';
-      localVideoContainer.appendChild(localAudio);
+      cleanupAudioElement(localAudioEl);
+      localAudioEl = attachAudioElement(localStream, { muted: true });
     }
     await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
     const answer = await peerConnection.createAnswer();
     await peerConnection.setLocalDescription(answer);
-    socket.emit('webrtc', { room: 'global', data: { type: 'answer', sdp: answer } });
+    socket.emit('webrtc', { room: ROOM, data: { type: 'answer', sdp: answer } });
     startCallBtn.disabled = true;
     endCallBtn.disabled = false;
+    const action = inCall ? 'update' : 'join';
+    inCall = true;
+    updateCallParticipation(action);
   }
 
   async function handleAnswer(sdp) {
@@ -259,8 +326,14 @@
       localStream.getTracks().forEach((track) => track.stop());
       localStream = null;
     }
-    localVideoContainer.innerHTML = '';
-    remoteVideoContainer.innerHTML = '';
+    cleanupAudioElement(localAudioEl);
+    cleanupAudioElement(remoteAudioEl);
+    localAudioEl = null;
+    remoteAudioEl = null;
+    if (inCall) {
+      updateCallParticipation('leave');
+      inCall = false;
+    }
     startCallBtn.disabled = false;
     endCallBtn.disabled = true;
   }
@@ -271,7 +344,7 @@
   endCallBtn.addEventListener('click', () => {
     endCall();
     // Notify others to end call (not strictly necessary here)
-    socket.emit('webrtc', { room: 'global', data: { type: 'hangup' } });
+    socket.emit('webrtc', { room: ROOM, data: { type: 'hangup' } });
   });
 
   // Handle incoming WebRTC signaling
