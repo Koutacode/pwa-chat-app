@@ -11,29 +11,96 @@
   const messagesEl = document.getElementById('messages');
   const inputEl = document.getElementById('input');
   const sendBtn = document.getElementById('send');
+  const shareLocationBtn = document.getElementById('shareLocation');
   const startCallBtn = document.getElementById('startCall');
   const endCallBtn = document.getElementById('endCall');
   const localVideoContainer = document.getElementById('localVideo');
   const remoteVideoContainer = document.getElementById('remoteVideo');
+  const iconInput = document.getElementById('iconInput');
+  const iconPreview = document.getElementById('iconPreview');
 
   const userName = prompt('ユーザー名を入力してください', 'ユーザー' + Math.floor(Math.random() * 1000));
+  let userIcon = localStorage.getItem('userIcon') || null;
+
+  if (userIcon) {
+    iconPreview.src = userIcon;
+  }
 
   // Join the default room
   socket.emit('join', 'global');
 
-  function addMessage({ user, text, time }) {
+  function addMessage({ user, text, time, icon, location }) {
     const li = document.createElement('li');
     const timestamp = new Date(time).toLocaleTimeString();
-    li.textContent = `[${timestamp}] ${user}: ${text}`;
+    if (user === 'system') {
+      li.classList.add('system');
+      const content = document.createElement('div');
+      content.className = 'content';
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = `[${timestamp}] system`;
+      const textEl = document.createElement('p');
+      textEl.className = 'text';
+      textEl.textContent = text;
+      content.appendChild(meta);
+      content.appendChild(textEl);
+      li.appendChild(content);
+    } else {
+      const avatar = document.createElement('div');
+      avatar.className = 'avatar';
+      const img = document.createElement('img');
+      img.alt = `${user}のアイコン`;
+      img.src = icon || 'icon-192.png';
+      avatar.appendChild(img);
+      const content = document.createElement('div');
+      content.className = 'content';
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      meta.textContent = `${user} ・ ${timestamp}`;
+      content.appendChild(meta);
+      if (text) {
+        const textEl = document.createElement('p');
+        textEl.className = 'text';
+        textEl.textContent = text;
+        content.appendChild(textEl);
+      }
+      if (location && typeof location.latitude === 'number' && typeof location.longitude === 'number') {
+        const link = document.createElement('a');
+        link.className = 'location-link';
+        link.href = `https://www.google.com/maps?q=${location.latitude},${location.longitude}`;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.textContent = '共有された位置情報を表示';
+        content.appendChild(link);
+      }
+      li.appendChild(avatar);
+      li.appendChild(content);
+    }
     messagesEl.appendChild(li);
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
+
+  iconInput.addEventListener('change', (event) => {
+    const [file] = event.target.files;
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      userIcon = reader.result;
+      iconPreview.src = userIcon;
+      try {
+        localStorage.setItem('userIcon', userIcon);
+      } catch (err) {
+        console.warn('Failed to persist user icon to localStorage:', err);
+      }
+    };
+    reader.readAsDataURL(file);
+  });
 
   // Send chat message
   sendBtn.addEventListener('click', () => {
     const text = inputEl.value.trim();
     if (text) {
-      socket.emit('message', { user: userName, text, room: 'global' });
+      socket.emit('message', { user: userName, text, room: 'global', icon: userIcon });
       inputEl.value = '';
     }
   });
@@ -51,6 +118,36 @@
 
   socket.on('system', (msg) => {
     addMessage({ user: 'system', text: msg, time: Date.now() });
+  });
+
+  shareLocationBtn.addEventListener('click', () => {
+    if (!navigator.geolocation) {
+      alert('お使いのブラウザでは位置情報を利用できません。');
+      return;
+    }
+    shareLocationBtn.disabled = true;
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const { latitude, longitude } = position.coords;
+        socket.emit('message', {
+          user: userName,
+          room: 'global',
+          icon: userIcon,
+          text: '位置情報を共有しました。',
+          location: { latitude, longitude },
+        });
+        shareLocationBtn.disabled = false;
+      },
+      (error) => {
+        alert('位置情報を取得できませんでした: ' + error.message);
+        shareLocationBtn.disabled = false;
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 10000,
+      }
+    );
   });
 
   // ---------- WebRTC VOICE CALL -----------

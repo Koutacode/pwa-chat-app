@@ -37,8 +37,15 @@ io.on('connection', (socket) => {
 
   // Chat message within a room
   socket.on('message', (msg) => {
-    const { room = 'global', text, user } = msg;
-    io.to(room).emit('message', { user, text, time: Date.now() });
+    const { room = 'global', text, user, icon, location } = msg;
+    const payload = {
+      user,
+      time: Date.now(),
+    };
+    if (text) payload.text = text;
+    if (icon) payload.icon = icon;
+    if (location) payload.location = location;
+    io.to(room).emit('message', payload);
   });
 
   // Signaling messages for WebRTC; forward to all peers in the room
