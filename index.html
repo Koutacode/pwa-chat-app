@@ -62,7 +62,10 @@
     #joinModal input { padding: 0.6rem; border-radius: 0.5rem; border: 1px solid #bbb; font-size: 1rem; }
     #joinModal button { padding: 0.75rem; font-size: 1rem; background: #2196f3; color: #fff; border: none; border-radius: 0.5rem; cursor: pointer; }
     #joinModal button:disabled { background: #90caf9; cursor: not-allowed; }
+    #createRoomButton { background: transparent; color: #2196f3; border: 1px solid #2196f3; }
+    #createRoomButton:disabled { color: #90caf9; border-color: #90caf9; }
     #joinError { color: #d32f2f; min-height: 1.2em; margin: 0; }
+    #createRoomMessage { color: #2e7d32; min-height: 1.2em; margin: 0; font-size: 0.9rem; }
     #adminModal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); display: flex; align-items: center; justify-content: center; padding: 1rem; z-index: 1000; }
     #adminModal.hidden { display: none; }
     #adminModal .modal-content { background: #fff; border-radius: 0.75rem; padding: 2rem; width: min(520px, 100%); max-height: 90vh; overflow-y: auto; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25); display: flex; flex-direction: column; gap: 1.25rem; position: relative; }
@@ -167,6 +170,8 @@
       </label>
       <p id="joinError" aria-live="polite"></p>
       <button id="joinRoom">ルームに参加</button>
+      <button id="createRoomButton" type="button">新しいルームを作成</button>
+      <p id="createRoomMessage" aria-live="polite"></p>
     </div>
   </div>
 

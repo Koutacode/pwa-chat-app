@@ -147,6 +147,16 @@ app.get('/api/rooms', (req, res) => {
   res.json({ rooms: getPublicRooms() });
 });
 
+app.post('/api/rooms', (req, res) => {
+  const { name, password } = req.body || {};
+  try {
+    const created = createRoom(name, password);
+    res.status(201).json({ ok: true, room: created, rooms: getPublicRooms() });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
 app.post('/api/admin/login', (req, res) => {
   const { password } = req.body || {};
   if (password !== ADMIN_PASSWORD) {

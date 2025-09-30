@@ -27,6 +27,8 @@
   const passwordInput = document.getElementById('passwordInput');
   const joinBtn = document.getElementById('joinRoom');
   const joinError = document.getElementById('joinError');
+  const createRoomBtn = document.getElementById('createRoomButton');
+  const createRoomMessage = document.getElementById('createRoomMessage');
   const roomUserListEl = document.getElementById('roomUserList');
   const openAdminBtn = document.getElementById('openAdmin');
   const adminModal = document.getElementById('adminModal');
@@ -301,7 +303,83 @@
     });
   }
 
+  async function handleCreateRoom() {
+    if (!createRoomBtn) {
+      return;
+    }
+
+    const roomName = roomNameInput.value.trim();
+    const password = passwordInput.value.trim();
+    const name = userNameInput.value.trim();
+
+    if (createRoomMessage) {
+      createRoomMessage.textContent = '';
+    }
+    joinError.textContent = '';
+
+    if (!roomName) {
+      joinError.textContent = 'ルーム名を入力してください。';
+      roomNameInput.focus();
+      return;
+    }
+
+    if (!password) {
+      joinError.textContent = 'パスワードを入力してください。';
+      passwordInput.focus();
+      return;
+    }
+
+    const originalLabel = createRoomBtn.textContent;
+    createRoomBtn.disabled = true;
+    createRoomBtn.textContent = '作成中…';
+
+    try {
+      const response = await fetch('/api/rooms', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ name: roomName, password }),
+      });
+
+      let data = {};
+      try {
+        data = await response.json();
+      } catch (error) {
+        data = {};
+      }
+
+      if (!response.ok || !data || data.ok !== true) {
+        const message = data && data.error ? data.error : 'ルームの作成に失敗しました。';
+        throw new Error(message);
+      }
+
+      renderRoomOptionsList(Array.isArray(data.rooms) ? data.rooms : []);
+
+      if (!name) {
+        if (createRoomMessage) {
+          createRoomMessage.textContent = 'ルームを作成しました。ユーザー名を入力して参加してください。';
+        }
+        userNameInput.focus();
+        return;
+      }
+
+      if (createRoomMessage) {
+        createRoomMessage.textContent = 'ルームを作成しました。参加しています…';
+      }
+      attemptJoin();
+    } catch (error) {
+      joinError.textContent = error && error.message ? error.message : 'ルームの作成に失敗しました。';
+    } finally {
+      createRoomBtn.disabled = false;
+      createRoomBtn.textContent = originalLabel;
+    }
+  }
+
   joinBtn.addEventListener('click', attemptJoin);
+  if (createRoomBtn) {
+    createRoomBtn.addEventListener('click', handleCreateRoom);
+  }
   passwordInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
       attemptJoin();
