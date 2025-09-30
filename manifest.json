@@ -1,6 +1,6 @@
 {
-  "name": "PWA Chat App",
-  "short_name": "ChatApp",
+  "name": "Kのチャット",
+  "short_name": "Kのチャット",
   "description": "A simple PWA chat application with group chat and voice call",
   "start_url": "/",
   "scope": "/",
