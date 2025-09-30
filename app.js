@@ -19,12 +19,39 @@
   const audioContainer = document.getElementById('audioElements');
   const iconInput = document.getElementById('iconInput');
   const iconPreview = document.getElementById('iconPreview');
+  const appContent = document.getElementById('appContent');
+  const joinModal = document.getElementById('joinModal');
+  const userNameInput = document.getElementById('userNameInput');
+  const passwordInput = document.getElementById('passwordInput');
+  const joinBtn = document.getElementById('joinRoom');
+  const joinError = document.getElementById('joinError');
+  const roomUserListEl = document.getElementById('roomUserList');
 
-  const userName = prompt('ユーザー名を入力してください', 'ユーザー' + Math.floor(Math.random() * 1000));
+  let userName = '';
   let userIcon = localStorage.getItem('userIcon') || null;
+  let joined = false;
   let inCall = false;
   let localAudioEl = null;
   let remoteAudioEl = null;
+
+  function setInteractionEnabled(enabled) {
+    inputEl.disabled = !enabled;
+    sendBtn.disabled = !enabled;
+    shareLocationBtn.disabled = !enabled;
+    startCallBtn.disabled = !enabled || inCall;
+    if (!enabled) {
+      endCallBtn.disabled = true;
+    } else if (!inCall) {
+      endCallBtn.disabled = true;
+    }
+  }
+
+  function refreshCallButtons() {
+    startCallBtn.disabled = !joined || inCall;
+    endCallBtn.disabled = !joined || !inCall;
+  }
+
+  setInteractionEnabled(false);
 
   function renderParticipants(participants) {
     participantListEl.innerHTML = '';
@@ -56,7 +83,30 @@
 
   renderParticipants([]);
 
+  function renderRoomUsers(users) {
+    roomUserListEl.innerHTML = '';
+    if (!Array.isArray(users) || users.length === 0) {
+      const emptyItem = document.createElement('li');
+      emptyItem.className = 'empty';
+      emptyItem.textContent = 'まだユーザーはいません。';
+      roomUserListEl.appendChild(emptyItem);
+      return;
+    }
+
+    users.forEach(({ id, user }) => {
+      const item = document.createElement('li');
+      item.textContent = user || 'ゲスト';
+      if (id === socket.id) {
+        item.classList.add('self');
+      }
+      roomUserListEl.appendChild(item);
+    });
+  }
+
+  renderRoomUsers([]);
+
   function updateCallParticipation(action) {
+    if (!joined) return;
     socket.emit('call-participation', {
       room: ROOM,
       action,
@@ -93,8 +143,56 @@
     iconPreview.src = userIcon;
   }
 
-  // Join the default room
-  socket.emit('join', { room: ROOM, user: userName, icon: userIcon || null });
+  function attemptJoin() {
+    if (joinBtn.disabled) return;
+    const name = userNameInput.value.trim();
+    const password = passwordInput.value.trim();
+    if (!name) {
+      joinError.textContent = 'ユーザー名を入力してください。';
+      userNameInput.focus();
+      return;
+    }
+    if (!password) {
+      joinError.textContent = 'パスワードを入力してください。';
+      passwordInput.focus();
+      return;
+    }
+
+    joinError.textContent = '';
+    joinBtn.disabled = true;
+    socket.emit('join', { room: ROOM, user: name, password, icon: userIcon || null }, (response) => {
+      joinBtn.disabled = false;
+      if (!response || response.ok !== true) {
+        joinError.textContent = response && response.error ? response.error : 'ルームに参加できませんでした。';
+        passwordInput.focus();
+        passwordInput.select();
+        return;
+      }
+
+      userName = name;
+      joined = true;
+      joinModal.classList.add('hidden');
+      appContent.classList.remove('hidden');
+      passwordInput.value = '';
+      setInteractionEnabled(true);
+      refreshCallButtons();
+      inputEl.focus();
+    });
+  }
+
+  joinBtn.addEventListener('click', attemptJoin);
+  passwordInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      attemptJoin();
+    }
+  });
+  userNameInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      attemptJoin();
+    }
+  });
+
+  userNameInput.focus();
 
   function addMessage({ user, text, time, icon, location }) {
     const li = document.createElement('li');
@@ -168,6 +266,7 @@
 
   // Send chat message
   sendBtn.addEventListener('click', () => {
+    if (!joined) return;
     const text = inputEl.value.trim();
     if (text) {
       socket.emit('message', { user: userName, text, room: ROOM, icon: userIcon });
@@ -176,7 +275,7 @@
   });
 
   inputEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && !inputEl.disabled) {
       sendBtn.click();
     }
   });
@@ -194,7 +293,20 @@
     renderParticipants(participants);
   });
 
+  socket.on('room-users', (users) => {
+    renderRoomUsers(users);
+  });
+
+  socket.on('clear-history', () => {
+    messagesEl.innerHTML = '';
+    addMessage({ user: 'system', text: 'チャット履歴はリセットされました。', time: Date.now() });
+  });
+
   shareLocationBtn.addEventListener('click', () => {
+    if (!joined) {
+      alert('ルームに参加してから位置情報を共有してください。');
+      return;
+    }
     if (!navigator.geolocation) {
       alert('お使いのブラウザでは位置情報を利用できません。');
       return;
@@ -230,6 +342,10 @@
   const iceServers = { iceServers: [ { urls: 'stun:stun.l.google.com:19302' } ] };
 
   async function startCall() {
+    if (!joined) {
+      alert('ルームに参加してから通話を開始してください。');
+      return;
+    }
     startCallBtn.disabled = true;
     endCallBtn.disabled = false;
     // Get local audio stream
@@ -237,8 +353,7 @@
       localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (err) {
       alert('マイクへのアクセスに失敗しました: ' + err);
-      startCallBtn.disabled = false;
-      endCallBtn.disabled = true;
+      refreshCallButtons();
       return;
     }
     cleanupAudioElement(localAudioEl);
@@ -265,6 +380,7 @@
     socket.emit('webrtc', { room: ROOM, data: { type: 'offer', sdp: offer } });
     const action = inCall ? 'update' : 'join';
     inCall = true;
+    refreshCallButtons();
     updateCallParticipation(action);
   }
 
@@ -302,6 +418,7 @@
     endCallBtn.disabled = false;
     const action = inCall ? 'update' : 'join';
     inCall = true;
+    refreshCallButtons();
     updateCallParticipation(action);
   }
 
@@ -332,10 +449,9 @@
     remoteAudioEl = null;
     if (inCall) {
       updateCallParticipation('leave');
-      inCall = false;
     }
-    startCallBtn.disabled = false;
-    endCallBtn.disabled = true;
+    inCall = false;
+    refreshCallButtons();
   }
 
   startCallBtn.addEventListener('click', () => {
