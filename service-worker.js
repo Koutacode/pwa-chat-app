@@ -5,7 +5,7 @@
  * consider integrating IndexedDB or background sync.
  */
 
-const CACHE_NAME = 'pwa-chat-cache-v1';
+const CACHE_NAME = 'pwa-chat-cache-v2';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
