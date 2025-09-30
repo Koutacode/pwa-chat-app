@@ -8,7 +8,12 @@
   <title>PWA Chat App</title>
   <style>
     body { font-family: sans-serif; margin: 0; padding: 0; background: #f5f5f5; }
-    header { background: #2196f3; color: white; padding: 1rem; text-align: center; }
+    header { background: #2196f3; color: white; padding: 1rem; }
+    .header-inner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; max-width: 960px; margin: 0 auto; }
+    header h1 { margin: 0; font-size: 1.75rem; }
+    .admin-button { background: rgba(255, 255, 255, 0.18); color: #fff; border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 999px; padding: 0.5rem 1rem; font-size: 0.95rem; cursor: pointer; transition: background 0.2s ease; }
+    .admin-button:hover { background: rgba(255, 255, 255, 0.3); }
+    .admin-button:focus { outline: 2px solid rgba(255, 255, 255, 0.7); outline-offset: 2px; }
     main { display: flex; flex-direction: column; min-height: calc(100vh - 64px); }
     main.hidden { display: none; }
     #profile { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; background: #fff; border-bottom: 1px solid #e0e0e0; }
@@ -58,6 +63,35 @@
     #joinModal button { padding: 0.75rem; font-size: 1rem; background: #2196f3; color: #fff; border: none; border-radius: 0.5rem; cursor: pointer; }
     #joinModal button:disabled { background: #90caf9; cursor: not-allowed; }
     #joinError { color: #d32f2f; min-height: 1.2em; margin: 0; }
+    #adminModal { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); display: flex; align-items: center; justify-content: center; padding: 1rem; z-index: 1000; }
+    #adminModal.hidden { display: none; }
+    #adminModal .modal-content { background: #fff; border-radius: 0.75rem; padding: 2rem; width: min(520px, 100%); max-height: 90vh; overflow-y: auto; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25); display: flex; flex-direction: column; gap: 1.25rem; position: relative; }
+    #adminModal h2 { margin: 0; font-size: 1.4rem; }
+    #closeAdmin { position: absolute; top: 1rem; right: 1rem; background: transparent; border: none; color: #555; font-size: 1.5rem; cursor: pointer; line-height: 1; }
+    #adminLoginSection, #adminPanel { display: flex; flex-direction: column; gap: 1rem; }
+    #adminLoginSection label, #adminPanel label { display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.95rem; }
+    #adminLoginSection input, #adminPanel input { padding: 0.6rem; border-radius: 0.5rem; border: 1px solid #bbb; font-size: 1rem; }
+    #adminLoginBtn, #adminLogout, #createRoomForm button { padding: 0.65rem 1rem; font-size: 1rem; border-radius: 0.5rem; border: none; cursor: pointer; }
+    #adminLoginBtn { background: #2196f3; color: #fff; }
+    #adminLogout { align-self: flex-start; background: #eceff1; color: #37474f; }
+    #adminLogout:hover { background: #dfe4e8; }
+    #createRoomForm { display: grid; gap: 0.75rem; }
+    #createRoomForm h3 { margin: 0; font-size: 1.1rem; }
+    #createRoomForm button { background: #4caf50; color: #fff; justify-self: flex-start; }
+    #createRoomForm button:disabled { background: #a5d6a7; cursor: not-allowed; }
+    #adminRoomList { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.75rem; }
+    #adminRoomList li.empty { text-align: center; color: #666; font-style: italic; background: #f5f5f5; padding: 0.75rem; border-radius: 0.5rem; }
+    .admin-room-list-wrapper { display: flex; flex-direction: column; gap: 0.75rem; }
+    .admin-room-list-wrapper h3 { margin: 0; font-size: 1.1rem; }
+    .admin-room-item { display: flex; justify-content: space-between; gap: 1rem; background: #f1f8e9; border-radius: 0.75rem; padding: 0.75rem 1rem; align-items: flex-start; }
+    .admin-room-item .info { display: flex; flex-direction: column; gap: 0.3rem; }
+    .admin-room-item .name { font-weight: bold; font-size: 1.05rem; color: #1b5e20; }
+    .admin-room-item .password { font-size: 0.95rem; color: #33691e; }
+    .admin-room-item .meta { font-size: 0.8rem; color: #607d8b; }
+    .admin-room-item .actions { display: flex; gap: 0.5rem; }
+    .admin-room-item .actions .danger { background: #e53935; color: #fff; border: none; border-radius: 0.5rem; padding: 0.5rem 0.85rem; cursor: pointer; }
+    .admin-room-item .actions .danger:hover { background: #c62828; }
+    #adminError { color: #d32f2f; min-height: 1.2em; margin: 0; }
     @media (max-width: 768px) {
       #chatLayout { flex-direction: column; }
       #roomUsers { width: 100%; }
@@ -67,7 +101,10 @@
 </head>
 <body>
   <header>
-    <h1>PWA Chat App</h1>
+    <div class="header-inner">
+      <h1>PWA Chat App</h1>
+      <button id="openAdmin" type="button" class="admin-button">ルーム管理</button>
+    </div>
   </header>
   <main id="appContent" class="hidden">
     <section id="profile">
@@ -114,24 +151,56 @@
 
   <div id="joinModal" role="dialog" aria-modal="true">
     <div class="modal-content">
-    <    <h2>ルームに参加</h2>
-    <label>
+      <h2>ルームに参加</h2>
+      <label>
         ルーム名
-        <input id="roomNameInput" type="text" placeholder="ルーム名" autocomplete="off" />
-    </label>
-
-
-   
+        <input id="roomNameInput" type="text" placeholder="ルーム名" autocomplete="off" list="roomOptions" />
+        <datalist id="roomOptions"></datalist>
+      </label>
       <label>
         ユーザー名
         <input id="userNameInput" type="text" placeholder="ユーザー名" autocomplete="nickname" />
       </label>
       <label>
-        パスワード
+        ルームのパスワード
         <input id="passwordInput" type="password" placeholder="パスワード" autocomplete="current-password" />
       </label>
       <p id="joinError" aria-live="polite"></p>
       <button id="joinRoom">ルームに参加</button>
+    </div>
+  </div>
+
+  <div id="adminModal" class="hidden" role="dialog" aria-modal="true">
+    <div class="modal-content">
+      <button id="closeAdmin" type="button" aria-label="閉じる">×</button>
+      <h2>ルーム管理</h2>
+      <section id="adminLoginSection">
+        <label>
+          管理者パスワード
+          <input id="adminPasswordInput" type="password" placeholder="管理者パスワード" autocomplete="current-password" />
+        </label>
+        <button id="adminLoginBtn" type="button">ログイン</button>
+      </section>
+      <section id="adminPanel" class="hidden">
+        <form id="createRoomForm">
+          <h3>ルームを追加</h3>
+          <label>
+            ルーム名
+            <input id="newRoomName" type="text" placeholder="新しいルーム名" autocomplete="off" />
+          </label>
+          <label>
+            ルームのパスワード
+            <input id="newRoomPassword" type="password" placeholder="ルームのパスワード" autocomplete="new-password" />
+          </label>
+          <button type="submit">追加</button>
+        </form>
+        <div class="admin-room-list-wrapper">
+          <h3>既存のルーム</h3>
+          <ul id="adminRoomList"></ul>
+        </div>
+        <button id="adminLogout" type="button">ログアウト</button>
+      </section>
+      <p id="adminError" aria-live="polite"></p>
     </div>
   </div>
 
