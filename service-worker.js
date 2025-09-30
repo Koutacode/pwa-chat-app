@@ -40,18 +40,40 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const { request } = event;
-  // Bypass non‑GET requests
   if (request.method !== 'GET') return;
+
+  // Avoid caching Socket.io polling or WebSocket requests. Treating them like
+  // static assets breaks the realtime connection and prevents chat messages
+  // from being delivered when the service worker is active.
+  const url = new URL(request.url);
+  const isSameOrigin = url.origin === self.location.origin;
+  if (isSameOrigin && url.pathname.startsWith('/socket.io/')) {
+    event.respondWith(fetch(request));
+    return;
+  }
+
   event.respondWith(
-    caches.match(request).then((cached) => {
-      const fetchPromise = fetch(request).then((networkResponse) => {
-        // Update cache
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(request, networkResponse.clone());
-        });
-        return networkResponse.clone();
-      });
-      return cached || fetchPromise;
-    })
+    (async () => {
+      try {
+        const networkResponse = await fetch(request);
+        const cache = await caches.open(CACHE_NAME);
+        cache.put(request, networkResponse.clone());
+        return networkResponse;
+      } catch (error) {
+        const cached = await caches.match(request);
+        if (cached) {
+          return cached;
+        }
+
+        if (request.mode === 'navigate') {
+          const fallback = await caches.match('/index.html');
+          if (fallback) {
+            return fallback;
+          }
+        }
+
+        throw error;
+      }
+    })()
   );
 });
