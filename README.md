@@ -1,4 +1,4 @@
-# PWA Chat App
+# Kのチャット
 
 This is a minimal progressive web app (PWA) that demonstrates how to build a simple chat application with group messaging and voice call capabilities using Socket.io and WebRTC.
 
