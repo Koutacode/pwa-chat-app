@@ -43,6 +43,7 @@ const roomBlockedIps = new Map();
 
 const MAX_MESSAGES_PER_ROOM = 500;
 const MAX_MEMBERS_PER_ROOM = 5;
+const MAX_ICON_DATA_URL_LENGTH = 120000; // ~120 KB upper bound for profile icons
 const DEFAULT_ROOMS = [
   { name: 'global', password: 'global' },
 ];
@@ -72,6 +73,23 @@ function ensureRoom(name) {
 
 function getPublicRooms() {
   return Array.from(roomDirectory.keys()).map((name) => ({ name }));
+}
+
+function sanitizeIconDataUrl(value) {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('data:image/')) {
+    return null;
+  }
+  if (trimmed.length > MAX_ICON_DATA_URL_LENGTH) {
+    return null;
+  }
+  return trimmed;
 }
 
 function getAdminRooms() {
@@ -336,7 +354,11 @@ function broadcastParticipants(room) {
 function emitRoomUsers(room) {
   const members = roomMembers.get(room);
   const payload = members
-    ? Array.from(members.values()).map(({ id, user }) => ({ id, user }))
+    ? Array.from(members.values()).map(({ id, user, icon }) => ({
+        id,
+        user,
+        icon: icon ?? null,
+      }))
     : [];
   io.to(room).emit('room-users', payload);
 }
@@ -374,8 +396,8 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const icon = Object.prototype.hasOwnProperty.call(payload, 'icon') && payload.icon
-      ? payload.icon
+    const icon = Object.prototype.hasOwnProperty.call(payload, 'icon')
+      ? sanitizeIconDataUrl(payload.icon)
       : null;
 
     if (!ensureRoom(roomName)) {
@@ -438,17 +460,30 @@ io.on('connection', (socket) => {
 
     const text = typeof msg.text === 'string' ? msg.text.trim() : '';
     const location = msg.location && typeof msg.location === 'object' ? msg.location : undefined;
-    const incomingIcon = msg.icon;
-    let icon = profile.icon || null;
-    if (incomingIcon && !profile.icon) {
-      icon = incomingIcon;
-      const updatedProfile = { ...profile, icon: incomingIcon };
-      userProfiles.set(socket.id, updatedProfile);
-      const members = roomMembers.get(room);
-      if (members && members.has(socket.id)) {
-        const existing = members.get(socket.id);
-        members.set(socket.id, { ...existing, icon: incomingIcon });
+    const hasIconProp = Object.prototype.hasOwnProperty.call(msg, 'icon');
+    const sanitizedIcon = hasIconProp ? sanitizeIconDataUrl(msg.icon) : undefined;
+    const requestedRemoval = hasIconProp && msg.icon === null;
+    let icon = profile.icon ?? null;
+    if (hasIconProp && (sanitizedIcon || requestedRemoval)) {
+      const nextIcon = sanitizedIcon ?? null;
+      if (nextIcon !== profile.icon) {
+        const updatedProfile = { ...profile, icon: nextIcon };
+        userProfiles.set(socket.id, updatedProfile);
+        const members = roomMembers.get(room);
+        if (members && members.has(socket.id)) {
+          const existing = members.get(socket.id);
+          members.set(socket.id, { ...existing, icon: nextIcon });
+        }
+        const participants = callParticipants.get(room);
+        if (participants && participants.has(socket.id)) {
+          const participant = participants.get(socket.id);
+          participants.set(socket.id, { ...participant, icon: nextIcon });
+          callParticipants.set(room, participants);
+          broadcastParticipants(room);
+        }
+        emitRoomUsers(room);
       }
+      icon = nextIcon;
     }
 
     if (!text && !location) {
@@ -460,7 +495,7 @@ io.on('connection', (socket) => {
       time: Date.now(),
     };
     if (text) payload.text = text;
-    if (icon || incomingIcon) payload.icon = icon || incomingIcon;
+    if (icon) payload.icon = icon;
     if (location) payload.location = location;
 
     const history = roomMessages.get(room) || [];
@@ -508,9 +543,22 @@ io.on('connection', (socket) => {
     } else if (action === 'join' || action === 'update') {
       const existingProfile = profile;
       const nameFromData = typeof data.user === 'string' && data.user.trim() ? data.user.trim() : undefined;
-      const iconFromData = Object.prototype.hasOwnProperty.call(data, 'icon') ? data.icon || null : undefined;
+      let iconProvided = Object.prototype.hasOwnProperty.call(data, 'icon');
+      let iconFromData;
+      if (iconProvided) {
+        if (data.icon === null) {
+          iconFromData = null;
+        } else {
+          const sanitizedIcon = sanitizeIconDataUrl(data.icon);
+          if (!sanitizedIcon) {
+            iconProvided = false;
+          } else {
+            iconFromData = sanitizedIcon;
+          }
+        }
+      }
       const participantUser = nameFromData || existingProfile.user || socket.id;
-      const participantIcon = iconFromData !== undefined ? iconFromData : existingProfile.icon ?? null;
+      const participantIcon = iconProvided ? iconFromData ?? null : existingProfile.icon ?? null;
       const info = { id: socket.id, user: participantUser, icon: participantIcon };
       participants.set(socket.id, info);
       callParticipants.set(room, participants);
@@ -518,7 +566,6 @@ io.on('connection', (socket) => {
       const members = roomMembers.get(room);
       if (members && members.has(socket.id)) {
         members.set(socket.id, { id: socket.id, user: participantUser, icon: participantIcon });
-        roomMembers.set(room, members);
         emitRoomUsers(room);
       }
       changed = true;
@@ -527,6 +574,76 @@ io.on('connection', (socket) => {
     if (changed) {
       broadcastParticipants(room);
     }
+  });
+
+  socket.on('profile-update', (payload = {}, maybeCallback) => {
+    const callback = typeof maybeCallback === 'function' ? maybeCallback : () => {};
+    const profile = userProfiles.get(socket.id);
+    if (!profile || !profile.room) {
+      callback({ ok: false, error: 'ルームに参加していません。' });
+      return;
+    }
+
+    const room = profile.room;
+    const updates = {};
+
+    if (Object.prototype.hasOwnProperty.call(payload, 'user')) {
+      const proposedUser = typeof payload.user === 'string' ? payload.user.trim() : '';
+      if (!proposedUser) {
+        callback({ ok: false, error: 'ユーザー名を空にはできません。' });
+        return;
+      }
+      updates.user = proposedUser;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(payload, 'icon')) {
+      if (payload.icon === null) {
+        updates.icon = null;
+      } else {
+        const sanitized = sanitizeIconDataUrl(payload.icon);
+        if (!sanitized) {
+          callback({ ok: false, error: 'アイコンの形式またはサイズがサポートされていません。' });
+          return;
+        }
+        updates.icon = sanitized;
+      }
+    }
+
+    if (!Object.keys(updates).length) {
+      callback({ ok: false, error: '更新内容が見つかりませんでした。' });
+      return;
+    }
+
+    const updatedProfile = { ...profile, ...updates };
+    userProfiles.set(socket.id, updatedProfile);
+
+    const members = roomMembers.get(room);
+    if (members && members.has(socket.id)) {
+      const existing = members.get(socket.id);
+      members.set(socket.id, { ...existing, ...updates });
+      emitRoomUsers(room);
+    }
+
+    const participants = callParticipants.get(room);
+    if (participants && participants.has(socket.id)) {
+      const participant = participants.get(socket.id);
+      participants.set(socket.id, { ...participant, ...updates });
+      callParticipants.set(room, participants);
+      broadcastParticipants(room);
+    }
+
+    const payloadForClients = {
+      id: socket.id,
+      user: updatedProfile.user,
+    };
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'icon')) {
+      payloadForClients.icon = updates.icon ?? null;
+    }
+
+    socket.emit('profile-updated', payloadForClients);
+    socket.to(room).emit('profile-updated', payloadForClients);
+    callback({ ok: true, profile: { user: updatedProfile.user, icon: updatedProfile.icon ?? null } });
   });
 
   // Handle disconnect

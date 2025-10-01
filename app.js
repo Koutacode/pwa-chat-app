@@ -19,6 +19,7 @@
   const audioContainer = document.getElementById('audioElements');
   const iconInput = document.getElementById('iconInput');
   const iconPreview = document.getElementById('iconPreview');
+  const iconStatus = document.getElementById('iconStatus');
   const appContent = document.getElementById('appContent');
   const joinModal = document.getElementById('joinModal');
   const roomNameInput = document.getElementById('roomNameInput');
@@ -54,6 +55,7 @@
   const ACTIVE_SESSION_KEY = 'activeSession';
 
   let userIcon = localStorage.getItem('userIcon') || null;
+  const DEFAULT_ICON_SRC = iconPreview ? iconPreview.getAttribute('src') || 'icon-192.png' : 'icon-192.png';
   let joined = false;
   let inCall = false;
   let localAudioEl = null;
@@ -62,6 +64,178 @@
 
   const LOCAL_MESSAGE_LIMIT = 500;
   let pendingScrollToBottom = false;
+  let iconStatusTimer = null;
+  let currentRoomUsers = [];
+
+  function persistUserIcon(icon) {
+    try {
+      if (icon) {
+        localStorage.setItem('userIcon', icon);
+      } else {
+        localStorage.removeItem('userIcon');
+      }
+    } catch (err) {
+      console.warn('Failed to persist user icon to localStorage:', err);
+    }
+  }
+
+  function setUserIcon(icon, { persist = true } = {}) {
+    userIcon = icon || null;
+    if (iconPreview) {
+      iconPreview.src = userIcon || DEFAULT_ICON_SRC;
+    }
+    if (persist) {
+      persistUserIcon(userIcon);
+    }
+  }
+
+  function setIconStatus(message, { isError = false, autoClear = !isError } = {}) {
+    if (!iconStatus) return;
+    iconStatus.textContent = message || '';
+    iconStatus.classList.toggle('error', Boolean(isError));
+    if (iconStatusTimer) {
+      clearTimeout(iconStatusTimer);
+      iconStatusTimer = null;
+    }
+    if (message && autoClear) {
+      iconStatusTimer = setTimeout(() => {
+        iconStatus.textContent = '';
+        iconStatus.classList.remove('error');
+        iconStatusTimer = null;
+      }, 4000);
+    }
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error || new Error('Failed to read blob as data URL.'));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error || new Error('Failed to read file.'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function createOptimizedIconDataUrl(file) {
+    if (!file) return null;
+    const MAX_SIZE = 128;
+    if (typeof createImageBitmap === 'function') {
+      try {
+        const bitmap = await createImageBitmap(file);
+        const scale = Math.min(1, MAX_SIZE / Math.max(bitmap.width, bitmap.height || 1));
+        const width = Math.max(1, Math.round(bitmap.width * scale));
+        const height = Math.max(1, Math.round(bitmap.height * scale));
+        let dataUrl;
+        if (typeof OffscreenCanvas !== 'undefined') {
+          const canvas = new OffscreenCanvas(width, height);
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            throw new Error('Failed to obtain OffscreenCanvas context.');
+          }
+          ctx.drawImage(bitmap, 0, 0, width, height);
+          const blob = await canvas.convertToBlob({ type: 'image/png', quality: 0.92 });
+          dataUrl = await blobToDataUrl(blob);
+        } else {
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            throw new Error('Failed to obtain CanvasRenderingContext2D.');
+          }
+          ctx.drawImage(bitmap, 0, 0, width, height);
+          dataUrl = canvas.toDataURL('image/png', 0.92);
+        }
+        if (typeof bitmap.close === 'function') {
+          bitmap.close();
+        }
+        return dataUrl;
+      } catch (error) {
+        console.warn('Failed to optimise icon with createImageBitmap:', error);
+      }
+    }
+    try {
+      return await readFileAsDataUrl(file);
+    } catch (error) {
+      console.warn('Failed to read icon file:', error);
+      return null;
+    }
+  }
+
+  function emitProfileUpdate(update) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const timeoutId = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve({ ok: false, error: 'サーバーへの接続を確認できませんでした。' });
+      }, 5000);
+      socket.emit('profile-update', update, (response = {}) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        resolve(response);
+      });
+    });
+  }
+
+  async function applyUserIconChange(iconDataUrl) {
+    const previousIcon = userIcon;
+    setUserIcon(iconDataUrl);
+    if (!joined || !ROOM) {
+      if (inCall) {
+        updateCallParticipation('update');
+      }
+      return { ok: true };
+    }
+    const response = await emitProfileUpdate({ icon: iconDataUrl });
+    if (!response || response.ok !== true) {
+      setUserIcon(previousIcon);
+      return {
+        ok: false,
+        error: response && response.error ? response.error : 'アイコンの更新に失敗しました。',
+      };
+    }
+    if (inCall) {
+      updateCallParticipation('update');
+    }
+    return { ok: true };
+  }
+
+  function upsertRoomUser(update = {}) {
+    if (!update || !update.id) return;
+    const next = [];
+    let found = false;
+    currentRoomUsers.forEach((entry) => {
+      if (entry.id === update.id) {
+        found = true;
+        next.push({
+          id: entry.id,
+          user: typeof update.user === 'string' ? update.user : entry.user,
+          icon: Object.prototype.hasOwnProperty.call(update, 'icon') ? update.icon ?? null : entry.icon,
+        });
+      } else {
+        next.push(entry);
+      }
+    });
+    if (!found) {
+      next.push({
+        id: update.id,
+        user: typeof update.user === 'string' ? update.user : '',
+        icon: Object.prototype.hasOwnProperty.call(update, 'icon') ? update.icon ?? null : null,
+      });
+    }
+    currentRoomUsers = next;
+    renderRoomUsers();
+  }
 
   function setInteractionEnabled(enabled) {
     inputEl.disabled = !enabled;
@@ -170,7 +344,7 @@
     participants.forEach(({ id, user, icon }) => {
       const item = document.createElement('li');
       const avatar = document.createElement('img');
-      avatar.src = icon || 'icon-192.png';
+      avatar.src = icon || DEFAULT_ICON_SRC;
       avatar.alt = `${user || 'ユーザー'}のアイコン`;
       item.appendChild(avatar);
       const name = document.createElement('span');
@@ -188,8 +362,16 @@
   renderParticipants([]);
 
   function renderRoomUsers(users) {
+    if (Array.isArray(users)) {
+      currentRoomUsers = users.map(({ id, user, icon }) => ({
+        id,
+        user: typeof user === 'string' ? user : '',
+        icon: typeof icon === 'string' && icon ? icon : null,
+      }));
+    }
+    const list = currentRoomUsers;
     roomUserListEl.innerHTML = '';
-    if (!Array.isArray(users) || users.length === 0) {
+    if (!Array.isArray(list) || list.length === 0) {
       const emptyItem = document.createElement('li');
       emptyItem.className = 'empty';
       emptyItem.textContent = 'まだユーザーはいません。';
@@ -197,9 +379,15 @@
       return;
     }
 
-    users.forEach(({ id, user }) => {
+    list.forEach(({ id, user, icon }) => {
       const item = document.createElement('li');
-      item.textContent = user || 'ゲスト';
+      const avatar = document.createElement('img');
+      avatar.src = icon || DEFAULT_ICON_SRC;
+      avatar.alt = `${user || 'ユーザー'}のアイコン`;
+      item.appendChild(avatar);
+      const name = document.createElement('span');
+      name.textContent = id === socket.id ? `${user || 'ゲスト'} (自分)` : user || 'ゲスト';
+      item.appendChild(name);
       if (id === socket.id) {
         item.classList.add('self');
       }
@@ -261,9 +449,7 @@
     }
   }
 
-  if (userIcon) {
-    iconPreview.src = userIcon;
-  }
+  setUserIcon(userIcon, { persist: false });
 
   function loadActiveSession() {
     try {
@@ -378,6 +564,7 @@
     renderMessages([]);
     renderParticipants([]);
     renderRoomUsers([]);
+    setIconStatus('');
     appContent.classList.add('hidden');
     joinModal.classList.remove('hidden');
     if (message) {
@@ -1147,23 +1334,34 @@
     }
   }
 
-  iconInput.addEventListener('change', (event) => {
-    const [file] = event.target.files;
+  iconInput.addEventListener('change', async (event) => {
+    const [file] = event.target.files || [];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      userIcon = reader.result;
-      iconPreview.src = userIcon;
-      try {
-        localStorage.setItem('userIcon', userIcon);
-      } catch (err) {
-        console.warn('Failed to persist user icon to localStorage:', err);
+    iconInput.disabled = true;
+    setIconStatus('アイコンを最適化しています…', { autoClear: false });
+    try {
+      const dataUrl = await createOptimizedIconDataUrl(file);
+      if (!dataUrl) {
+        setIconStatus('画像の処理に失敗しました。別の画像を選択してください。', { isError: true, autoClear: false });
+        return;
       }
-      if (inCall) {
-        updateCallParticipation('update');
+      const result = await applyUserIconChange(dataUrl);
+      if (!result.ok) {
+        setIconStatus(result.error || 'アイコンの更新に失敗しました。', { isError: true, autoClear: false });
+      } else {
+        setIconStatus('アイコンを更新しました。');
       }
-    };
-    reader.readAsDataURL(file);
+    } catch (error) {
+      console.warn('Failed to update icon:', error);
+      setIconStatus('アイコンの更新中にエラーが発生しました。', { isError: true, autoClear: false });
+    } finally {
+      iconInput.disabled = false;
+      iconInput.value = '';
+      setInteractionEnabled(joined);
+      if (joined) {
+        inputEl.focus();
+      }
+    }
   });
 
   // Send chat message
@@ -1200,6 +1398,18 @@
 
   socket.on('room-users', (users) => {
     renderRoomUsers(users);
+  });
+
+  socket.on('profile-updated', (payload = {}) => {
+    upsertRoomUser(payload);
+    if (payload.id === socket.id) {
+      if (Object.prototype.hasOwnProperty.call(payload, 'icon')) {
+        setUserIcon(payload.icon ?? null);
+      }
+      if (typeof payload.user === 'string' && payload.user.trim()) {
+        userName = payload.user.trim();
+      }
+    }
   });
 
   socket.on('clear-history', (payload = {}) => {
