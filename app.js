@@ -51,6 +51,8 @@
   let adminToken = null;
   let userName = '';
   
+  const ACTIVE_SESSION_KEY = 'activeSession';
+
   let userIcon = localStorage.getItem('userIcon') || null;
   let joined = false;
   let inCall = false;
@@ -257,6 +259,38 @@
     iconPreview.src = userIcon;
   }
 
+  function loadActiveSession() {
+    try {
+      const raw = sessionStorage.getItem(ACTIVE_SESSION_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return null;
+      const { room, user, password } = parsed;
+      if (!room || !user || !password) return null;
+      return { room, user, password };
+    } catch (error) {
+      console.warn('Failed to load active session:', error);
+      return null;
+    }
+  }
+
+  function saveActiveSession({ room, user, password }) {
+    try {
+      const payload = JSON.stringify({ room, user, password });
+      sessionStorage.setItem(ACTIVE_SESSION_KEY, payload);
+    } catch (error) {
+      console.warn('Failed to persist active session:', error);
+    }
+  }
+
+  function clearActiveSession() {
+    try {
+      sessionStorage.removeItem(ACTIVE_SESSION_KEY);
+    } catch (error) {
+      console.warn('Failed to clear active session:', error);
+    }
+  }
+
   const storedUserName = localStorage.getItem('userName');
   if (storedUserName) {
     userNameInput.value = storedUserName;
@@ -264,6 +298,13 @@
   const storedRoom = localStorage.getItem('lastRoom');
   if (storedRoom) {
     roomNameInput.value = storedRoom;
+  }
+
+  const activeSession = loadActiveSession();
+  if (activeSession) {
+    roomNameInput.value = activeSession.room;
+    userNameInput.value = activeSession.user;
+    passwordInput.value = activeSession.password;
   }
 
   function attemptJoin() {
@@ -295,6 +336,7 @@
         joinError.textContent = response && response.error ? response.error : 'ルームに参加できませんでした。';
         passwordInput.focus();
         passwordInput.select();
+        clearActiveSession();
         return;
       }
 
@@ -303,6 +345,7 @@
       joined = true;
       localStorage.setItem('userName', userName);
       localStorage.setItem('lastRoom', ROOM);
+      saveActiveSession({ room: ROOM, user: userName, password });
       const serverMessages = Array.isArray(response.messages) ? response.messages : [];
       const localMessages = loadLocalMessages(ROOM);
       const mergedMessages = mergeMessages(serverMessages, localMessages);
@@ -340,6 +383,7 @@
       clearLocalMessages(previousRoom);
     }
     ROOM = null;
+    clearActiveSession();
     updateLeaveRoomButton();
     if (adminModal) {
       adminModal.classList.add('hidden');
@@ -440,18 +484,28 @@
     }
   });
 
-  if (roomNameInput.value) {
-    if (userNameInput.value) {
-      passwordInput.focus();
+  if (!activeSession) {
+    if (roomNameInput.value) {
+      if (userNameInput.value) {
+        passwordInput.focus();
+      } else {
+        userNameInput.focus();
+      }
     } else {
-      userNameInput.focus();
+      roomNameInput.focus();
     }
-  } else {
-    roomNameInput.focus();
   }
 
   fetchRooms();
   requestNotificationPermission();
+
+  if (activeSession) {
+    setTimeout(() => {
+      if (!joined) {
+        attemptJoin();
+      }
+    }, 0);
+  }
 
   if (openAdminBtn) {
     openAdminBtn.addEventListener('click', () => {
