@@ -19,6 +19,13 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+function safeRandomUUID() {
+  if (typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return crypto.randomBytes(16).toString('hex');
+}
+
 app.use(express.json());
 // Serve static assets from the public directory
 app.use(express.static(__dirname));
@@ -288,7 +295,7 @@ app.post('/api/admin/login', (req, res) => {
   if (password !== ADMIN_PASSWORD) {
     return res.status(401).json({ ok: false, error: 'パスワードが違います。' });
   }
-  const token = crypto.randomUUID();
+  const token = safeRandomUUID();
   adminSessions.set(token, { createdAt: Date.now() });
   res.json({ ok: true, token, rooms: getAdminRooms() });
 });
