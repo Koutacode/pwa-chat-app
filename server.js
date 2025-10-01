@@ -12,6 +12,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const crypto = require('crypto');
+const net = require('net');
 
 
 const app = express();
@@ -37,6 +38,8 @@ const userProfiles = new Map();
 const callParticipants = new Map();
 // Track all room members so the client can display a roster
 const roomMembers = new Map();
+// Track blocked IP addresses per room
+const roomBlockedIps = new Map();
 
 const MAX_MESSAGES_PER_ROOM = 500;
 const DEFAULT_ROOMS = [
@@ -60,6 +63,9 @@ function ensureRoom(name) {
   if (!roomMessages.has(name)) {
     roomMessages.set(name, []);
   }
+  if (!roomBlockedIps.has(name)) {
+    roomBlockedIps.set(name, new Set());
+  }
   return true;
 }
 
@@ -72,11 +78,71 @@ function getAdminRooms() {
     name,
     password: info.password,
     createdAt: info.createdAt,
+    blockedIps: Array.from(roomBlockedIps.get(name) || []),
   }));
 }
 
 function broadcastRooms() {
   io.emit('rooms-update', getPublicRooms());
+}
+
+function normalizeIp(ip) {
+  if (typeof ip !== 'string') {
+    return '';
+  }
+  let value = ip.trim();
+  if (!value) {
+    return '';
+  }
+  if (value.startsWith('::ffff:')) {
+    value = value.slice(7);
+  }
+  if (value === '::1') {
+    return '127.0.0.1';
+  }
+  return value;
+}
+
+function getClientIp(socket) {
+  if (!socket) return '';
+  const address = socket.handshake?.address || socket.conn?.remoteAddress || '';
+  return normalizeIp(address);
+}
+
+function removeSocketFromRoom(socket, room, { notifyOthers = true } = {}) {
+  const roomName = sanitizeRoomName(room);
+  if (!roomName) return false;
+  const sockets = roomSockets.get(roomName);
+  let wasMember = false;
+  if (sockets && sockets.has(socket.id)) {
+    sockets.delete(socket.id);
+    wasMember = true;
+  }
+  socket.leave(roomName);
+  const profile = userProfiles.get(socket.id);
+  const displayName = profile?.user || socket.id;
+  if (notifyOthers && wasMember) {
+    socket.to(roomName).emit('system', `${displayName} left ${roomName}`);
+  }
+  const participants = callParticipants.get(roomName);
+  if (participants && participants.has(socket.id)) {
+    participants.delete(socket.id);
+    if (participants.size === 0) {
+      callParticipants.delete(roomName);
+    } else {
+      callParticipants.set(roomName, participants);
+    }
+    broadcastParticipants(roomName);
+  }
+  const members = roomMembers.get(roomName);
+  if (members && members.has(socket.id)) {
+    members.delete(socket.id);
+    emitRoomUsers(roomName);
+  }
+  if (profile) {
+    userProfiles.set(socket.id, { ...profile, room: null });
+  }
+  return wasMember;
 }
 
 function createRoom(name, password) {
@@ -107,12 +173,8 @@ function deleteRoom(name) {
     sockets.forEach((socketId) => {
       const client = io.sockets.sockets.get(socketId);
       if (client) {
-        client.leave(roomName);
+        removeSocketFromRoom(client, roomName, { notifyOthers: false });
         client.emit('room-deleted', { room: roomName });
-      }
-      const profile = userProfiles.get(socketId);
-      if (profile) {
-        userProfiles.set(socketId, { ...profile, room: null });
       }
     });
     roomSockets.delete(roomName);
@@ -122,7 +184,52 @@ function deleteRoom(name) {
   roomMessages.delete(roomName);
   roomMembers.delete(roomName);
   callParticipants.delete(roomName);
+  roomBlockedIps.delete(roomName);
   broadcastRooms();
+}
+
+function blockIpInRoom(name, ip) {
+  const roomName = sanitizeRoomName(name);
+  if (!roomDirectory.has(roomName)) {
+    throw new Error('Room not found.');
+  }
+  const normalized = normalizeIp(ip);
+  if (!normalized || net.isIP(normalized) === 0) {
+    throw new Error('有効なIPアドレスを入力してください。');
+  }
+  const blocked = roomBlockedIps.get(roomName) || new Set();
+  blocked.add(normalized);
+  roomBlockedIps.set(roomName, blocked);
+
+  const sockets = roomSockets.get(roomName);
+  if (sockets) {
+    Array.from(sockets).forEach((socketId) => {
+      const client = io.sockets.sockets.get(socketId);
+      if (!client) return;
+      const clientIp = getClientIp(client);
+      if (clientIp === normalized) {
+        removeSocketFromRoom(client, roomName, { notifyOthers: true });
+        client.emit('room-blocked', { room: roomName, ip: normalized });
+      }
+    });
+  }
+}
+
+function unblockIpInRoom(name, ip) {
+  const roomName = sanitizeRoomName(name);
+  if (!roomDirectory.has(roomName)) {
+    throw new Error('Room not found.');
+  }
+  const normalized = normalizeIp(ip);
+  if (!normalized) {
+    throw new Error('IPアドレスを入力してください。');
+  }
+  const blocked = roomBlockedIps.get(roomName);
+  if (!blocked || !blocked.has(normalized)) {
+    throw new Error('指定されたIPアドレスはブロックされていません。');
+  }
+  blocked.delete(normalized);
+  roomBlockedIps.set(roomName, blocked);
 }
 
 DEFAULT_ROOMS.forEach(({ name, password }) => {
@@ -197,6 +304,28 @@ app.delete('/api/admin/rooms/:name', authenticateAdmin, (req, res) => {
   }
 });
 
+app.post('/api/admin/rooms/:name/block-ip', authenticateAdmin, (req, res) => {
+  const { name } = req.params;
+  const { ip } = req.body || {};
+  try {
+    blockIpInRoom(name, ip);
+    res.json({ ok: true, rooms: getAdminRooms() });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
+app.delete('/api/admin/rooms/:name/block-ip', authenticateAdmin, (req, res) => {
+  const { name } = req.params;
+  const { ip } = req.body || {};
+  try {
+    unblockIpInRoom(name, ip);
+    res.json({ ok: true, rooms: getAdminRooms() });
+  } catch (error) {
+    res.status(400).json({ ok: false, error: error.message });
+  }
+});
+
 function broadcastParticipants(room) {
   const participants = callParticipants.get(room);
   const payload = participants ? Array.from(participants.values()) : [];
@@ -227,6 +356,12 @@ io.on('connection', (socket) => {
     const roomInfo = roomDirectory.get(roomName);
     if (!roomInfo) {
       if (callback) callback({ ok: false, error: '指定されたルームは存在しません。' });
+      return;
+    }
+    const clientIp = getClientIp(socket);
+    const blockedIps = roomBlockedIps.get(roomName);
+    if (clientIp && blockedIps && blockedIps.has(clientIp)) {
+      if (callback) callback({ ok: false, error: 'このIPアドレスからの参加はブロックされています。' });
       return;
     }
     if (roomInfo.password !== password) {
@@ -267,6 +402,18 @@ io.on('connection', (socket) => {
     const history = roomMessages.get(roomName) || [];
 
     if (callback) callback({ ok: true, room: roomName, messages: history });
+  });
+
+  socket.on('leave-room', (maybeCallback) => {
+    const callback = typeof maybeCallback === 'function' ? maybeCallback : () => {};
+    const profile = userProfiles.get(socket.id);
+    const room = profile?.room;
+    if (!room) {
+      callback({ ok: false, error: '現在参加しているルームがありません。' });
+      return;
+    }
+    removeSocketFromRoom(socket, room, { notifyOthers: true });
+    callback({ ok: true, room });
   });
 
   // Chat message within a room
@@ -379,29 +526,8 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log('user disconnected:', socket.id);
     const profile = userProfiles.get(socket.id);
-    const room = profile?.room;
-    if (room) {
-      const ids = roomSockets.get(room);
-      if (ids) {
-        ids.delete(socket.id);
-      }
-      const displayName = profile?.user || socket.id;
-      socket.to(room).emit('system', `${displayName} left ${room}`);
-      const participants = callParticipants.get(room);
-      if (participants && participants.has(socket.id)) {
-        participants.delete(socket.id);
-        if (participants.size === 0) {
-          callParticipants.delete(room);
-        } else {
-          callParticipants.set(room, participants);
-        }
-        broadcastParticipants(room);
-      }
-      const members = roomMembers.get(room);
-      if (members && members.has(socket.id)) {
-        members.delete(socket.id);
-        emitRoomUsers(room);
-      }
+    if (profile?.room) {
+      removeSocketFromRoom(socket, profile.room, { notifyOthers: true });
     }
     userProfiles.delete(socket.id);
   });
