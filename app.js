@@ -31,6 +31,7 @@
   const createRoomMessage = document.getElementById('createRoomMessage');
   const roomUserListEl = document.getElementById('roomUserList');
   const openAdminBtn = document.getElementById('openAdmin');
+  const refreshAppBtn = document.getElementById('refreshApp');
   const adminModal = document.getElementById('adminModal');
   const adminCloseBtn = document.getElementById('closeAdmin');
   const adminLoginSection = document.getElementById('adminLoginSection');
@@ -42,7 +43,6 @@
   const createRoomForm = document.getElementById('createRoomForm');
   const newRoomNameInput = document.getElementById('newRoomName');
   const newRoomPasswordInput = document.getElementById('newRoomPassword');
-  const adminLogoutBtn = document.getElementById('adminLogout');
   const leaveRoomBtn = document.getElementById('leaveRoomBtn');
 
   const LOCAL_MESSAGES_PREFIX = 'chat-messages:';
@@ -61,6 +61,7 @@
   let notificationPermission = typeof Notification !== 'undefined' ? Notification.permission : 'default';
 
   const LOCAL_MESSAGE_LIMIT = 500;
+  let pendingScrollToBottom = false;
 
   function setInteractionEnabled(enabled) {
     inputEl.disabled = !enabled;
@@ -210,9 +211,14 @@
 
   function updateLeaveRoomButton() {
     if (!leaveRoomBtn) return;
-    if (joined && ROOM) {
+    const isInRoom = joined && ROOM;
+    const isAdminLoggedIn = Boolean(adminToken);
+    if (isInRoom) {
       leaveRoomBtn.disabled = false;
       leaveRoomBtn.textContent = `「${ROOM}」から退出`;
+    } else if (isAdminLoggedIn) {
+      leaveRoomBtn.disabled = false;
+      leaveRoomBtn.textContent = 'ログアウト';
     } else {
       leaveRoomBtn.disabled = true;
       leaveRoomBtn.textContent = '参加中のルームはありません';
@@ -507,6 +513,13 @@
     }, 0);
   }
 
+  if (refreshAppBtn) {
+    refreshAppBtn.addEventListener('click', () => {
+      refreshAppBtn.disabled = true;
+      window.location.reload();
+    });
+  }
+
   if (openAdminBtn) {
     openAdminBtn.addEventListener('click', () => {
       adminError.textContent = '';
@@ -635,78 +648,96 @@
     });
   }
 
-  if (adminLogoutBtn) {
-    adminLogoutBtn.addEventListener('click', async () => {
-      adminError.textContent = '';
-
-      if (adminToken) {
-        try {
-          await fetch('/api/admin/logout', {
-            method: 'POST',
-            headers: {
-              'x-admin-token': adminToken,
-            },
-          });
-        } catch (error) {
-          console.warn('ログアウト処理に失敗しました:', error);
-        }
-      }
-
-      adminToken = null;
-      setAdminView(false);
-      adminPasswordInput.value = '';
-
-      const completeLogout = () => {
-        adminError.textContent = 'ログアウトしました。';
-        exitCurrentRoom('ログアウトしました。再度ルームを選択してください。');
-      };
-
-      if (joined && ROOM) {
-        socket.emit('leave-room', (response = {}) => {
-          if (!response || response.ok !== true) {
-            const message = response && response.error ? response.error : 'ルームから退出できませんでした。';
-            adminError.textContent = message;
-            return;
-          }
-          completeLogout();
-          fetchRooms();
-        });
-      } else {
-        completeLogout();
-      }
-    });
-  }
-
   if (leaveRoomBtn) {
-    leaveRoomBtn.addEventListener('click', () => {
+    leaveRoomBtn.addEventListener('click', async () => {
       adminError.textContent = '';
-      if (!joined || !ROOM) {
+      const wasInRoom = joined && ROOM;
+      const wasAdminLoggedIn = Boolean(adminToken);
+
+      if (!wasInRoom && !wasAdminLoggedIn) {
         adminError.textContent = '現在参加中のルームはありません。';
         updateLeaveRoomButton();
         return;
       }
+
       leaveRoomBtn.disabled = true;
-      socket.emit('leave-room', (response = {}) => {
-        leaveRoomBtn.disabled = false;
-        if (!response || response.ok !== true) {
-          const message = response && response.error ? response.error : 'ルームから退出できませんでした。';
-          adminError.textContent = message;
+
+      try {
+        if (wasInRoom) {
+          await new Promise((resolve, reject) => {
+            socket.emit('leave-room', (response = {}) => {
+              if (!response || response.ok !== true) {
+                const message = response && response.error ? response.error : 'ルームから退出できませんでした。';
+                reject(message);
+                return;
+              }
+              resolve();
+            });
+          });
+          adminError.textContent = 'ルームから退出しました。';
+          exitCurrentRoom('ルームから退出しました。');
+          fetchRooms();
           return;
         }
-        adminError.textContent = 'ルームから退出しました。';
-        exitCurrentRoom('ルームから退出しました。');
-        fetchRooms();
-      });
+
+        if (wasAdminLoggedIn) {
+          if (adminToken) {
+            try {
+              await fetch('/api/admin/logout', {
+                method: 'POST',
+                headers: {
+                  'x-admin-token': adminToken,
+                },
+              });
+            } catch (error) {
+              console.warn('ログアウト処理に失敗しました:', error);
+            }
+          }
+
+          adminToken = null;
+          setAdminView(false);
+          adminPasswordInput.value = '';
+          adminError.textContent = 'ログアウトしました。';
+          exitCurrentRoom('ログアウトしました。再度ルームを選択してください。');
+          fetchRooms();
+        }
+      } catch (error) {
+        adminError.textContent = typeof error === 'string' ? error : '操作に失敗しました。';
+      } finally {
+        leaveRoomBtn.disabled = false;
+        updateLeaveRoomButton();
+      }
     });
   }
 
-  function addMessage(message, { persist = true } = {}) {
-    if (!message || typeof message !== 'object') return;
-    const { user, text, time, icon, location } = message;
-    const li = document.createElement('li');
-    const timestampValue = typeof time === 'number' ? time : Date.now();
+  function scheduleMessagesScrollToBottom() {
+    if (pendingScrollToBottom) return;
+    pendingScrollToBottom = true;
+    requestAnimationFrame(() => {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      pendingScrollToBottom = false;
+    });
+  }
+
+  function createMessageElement(message) {
+    if (!message || typeof message !== 'object') return null;
+    const rawUser = typeof message.user === 'string' ? message.user : '';
+    const sanitizedText = typeof message.text === 'string' ? message.text : '';
+    const icon = typeof message.icon === 'string' && message.icon ? message.icon : null;
+    const hasLocation = message.location && typeof message.location === 'object';
+    const latitude = hasLocation && typeof message.location.latitude === 'number'
+      ? message.location.latitude
+      : null;
+    const longitude = hasLocation && typeof message.location.longitude === 'number'
+      ? message.location.longitude
+      : null;
+    const location = latitude !== null && longitude !== null ? { latitude, longitude } : null;
+    const timestampValue = typeof message.time === 'number' ? message.time : Date.now();
     const timestamp = new Date(timestampValue).toLocaleTimeString();
-    if (user === 'system') {
+
+    const li = document.createElement('li');
+
+    if (rawUser === 'system') {
       li.classList.add('system');
       const content = document.createElement('div');
       content.className = 'content';
@@ -715,30 +746,34 @@
       meta.textContent = `[${timestamp}] system`;
       const textEl = document.createElement('p');
       textEl.className = 'text';
-      textEl.textContent = text;
+      textEl.textContent = sanitizedText;
       content.appendChild(meta);
       content.appendChild(textEl);
       li.appendChild(content);
     } else {
+      const displayUser = rawUser || 'ゲスト';
       const avatar = document.createElement('div');
       avatar.className = 'avatar';
       const img = document.createElement('img');
-      img.alt = `${user}のアイコン`;
+      img.alt = `${displayUser}のアイコン`;
       img.src = icon || 'icon-192.png';
       avatar.appendChild(img);
+
       const content = document.createElement('div');
       content.className = 'content';
       const meta = document.createElement('div');
       meta.className = 'meta';
-      meta.textContent = `${user} ・ ${timestamp}`;
+      meta.textContent = `${displayUser} ・ ${timestamp}`;
       content.appendChild(meta);
-      if (text) {
+
+      if (sanitizedText) {
         const textEl = document.createElement('p');
         textEl.className = 'text';
-        textEl.textContent = text;
+        textEl.textContent = sanitizedText;
         content.appendChild(textEl);
       }
-      if (location && typeof location.latitude === 'number' && typeof location.longitude === 'number') {
+
+      if (location) {
         const link = document.createElement('a');
         link.className = 'location-link';
         link.href = `https://www.google.com/maps?q=${location.latitude},${location.longitude}`;
@@ -747,27 +782,49 @@
         link.textContent = '共有された位置情報を表示';
         content.appendChild(link);
       }
+
       li.appendChild(avatar);
       li.appendChild(content);
     }
-    messagesEl.appendChild(li);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
 
-    if (persist && ROOM) {
-      appendLocalMessage(ROOM, {
-        user,
-        text,
+    return {
+      element: li,
+      persisted: {
+        user: rawUser,
+        text: sanitizedText,
         time: timestampValue,
         icon,
         location,
-      });
+      },
+    };
+  }
+
+  function addMessage(message, { persist = true } = {}) {
+    const built = createMessageElement(message);
+    if (!built) return;
+    messagesEl.appendChild(built.element);
+    scheduleMessagesScrollToBottom();
+
+    if (persist && ROOM) {
+      appendLocalMessage(ROOM, built.persisted);
     }
   }
 
   function renderMessages(messages) {
     messagesEl.innerHTML = '';
-    if (!Array.isArray(messages)) return;
-    messages.forEach((message) => addMessage(message, { persist: false }));
+    if (!Array.isArray(messages) || messages.length === 0) {
+      scheduleMessagesScrollToBottom();
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    messages.forEach((message) => {
+      const built = createMessageElement(message);
+      if (!built) return;
+      fragment.appendChild(built.element);
+    });
+    messagesEl.appendChild(fragment);
+    scheduleMessagesScrollToBottom();
   }
 
   function renderRoomOptionsList(rooms) {

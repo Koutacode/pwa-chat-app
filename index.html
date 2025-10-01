@@ -7,13 +7,15 @@
   <link rel="manifest" href="manifest.json">
   <title>Kのチャット</title>
   <style>
+    html, body { overscroll-behavior-y: contain; overscroll-behavior: contain; }
     body { font-family: sans-serif; margin: 0; padding: 0; background: #f5f5f5; }
     header { background: #2196f3; color: white; padding: 1rem; }
-    .header-inner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; max-width: 960px; margin: 0 auto; }
+    .header-inner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; max-width: 960px; margin: 0 auto; flex-wrap: wrap; }
     header h1 { margin: 0; font-size: 1.75rem; }
-    .admin-button { background: rgba(255, 255, 255, 0.18); color: #fff; border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 999px; padding: 0.5rem 1rem; font-size: 0.95rem; cursor: pointer; transition: background 0.2s ease; }
-    .admin-button:hover { background: rgba(255, 255, 255, 0.3); }
-    .admin-button:focus { outline: 2px solid rgba(255, 255, 255, 0.7); outline-offset: 2px; }
+    .header-actions { display: flex; align-items: center; gap: 0.5rem; }
+    .header-button { background: rgba(255, 255, 255, 0.18); color: #fff; border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 999px; padding: 0.5rem 1rem; font-size: 0.95rem; cursor: pointer; transition: background 0.2s ease; }
+    .header-button:hover { background: rgba(255, 255, 255, 0.3); }
+    .header-button:focus { outline: 2px solid rgba(255, 255, 255, 0.7); outline-offset: 2px; }
     .secondary-button { background: #ffffff; color: #1976d2; border: 1px solid #1976d2; border-radius: 0.5rem; padding: 0.5rem 0.85rem; cursor: pointer; transition: background 0.2s ease, color 0.2s ease; }
     .secondary-button:hover { background: #e3f2fd; }
     .secondary-button:disabled { background: #eceff1; color: #90a4ae; border-color: #cfd8dc; cursor: not-allowed; }
@@ -77,10 +79,8 @@
     #adminLoginSection, #adminPanel { display: flex; flex-direction: column; gap: 1rem; }
     #adminLoginSection label, #adminPanel label { display: flex; flex-direction: column; gap: 0.4rem; font-size: 0.95rem; }
     #adminLoginSection input, #adminPanel input { padding: 0.6rem; border-radius: 0.5rem; border: 1px solid #bbb; font-size: 1rem; }
-    #adminLoginBtn, #adminLogout, #createRoomForm button { padding: 0.65rem 1rem; font-size: 1rem; border-radius: 0.5rem; border: none; cursor: pointer; }
+    #adminLoginBtn, #createRoomForm button { padding: 0.65rem 1rem; font-size: 1rem; border-radius: 0.5rem; border: none; cursor: pointer; }
     #adminLoginBtn { background: #2196f3; color: #fff; }
-    #adminLogout { align-self: flex-start; background: #eceff1; color: #37474f; }
-    #adminLogout:hover { background: #dfe4e8; }
     #createRoomForm { display: grid; gap: 0.75rem; }
     #createRoomForm h3 { margin: 0; font-size: 1.1rem; }
     #createRoomForm button { background: #4caf50; color: #fff; justify-self: flex-start; }
@@ -116,7 +116,10 @@
   <header>
     <div class="header-inner">
       <h1>Kのチャット</h1>
-      <button id="openAdmin" type="button" class="admin-button">ルーム管理</button>
+      <div class="header-actions">
+        <button id="refreshApp" type="button" class="header-button" aria-label="表示を更新">更新</button>
+        <button id="openAdmin" type="button" class="header-button">ルーム管理</button>
+      </div>
     </div>
   </header>
   <main id="appContent" class="hidden">
@@ -214,7 +217,6 @@
           <h3>既存のルーム</h3>
           <ul id="adminRoomList"></ul>
         </div>
-        <button id="adminLogout" type="button">ログアウト</button>
       </section>
       <p id="adminError" aria-live="polite"></p>
     </div>
