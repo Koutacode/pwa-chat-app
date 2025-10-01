@@ -43,6 +43,7 @@
   const newRoomNameInput = document.getElementById('newRoomName');
   const newRoomPasswordInput = document.getElementById('newRoomPassword');
   const adminLogoutBtn = document.getElementById('adminLogout');
+  const leaveRoomBtn = document.getElementById('leaveRoomBtn');
 
   const LOCAL_MESSAGES_PREFIX = 'chat-messages:';
 
@@ -205,6 +206,19 @@
 
   renderRoomUsers([]);
 
+  function updateLeaveRoomButton() {
+    if (!leaveRoomBtn) return;
+    if (joined && ROOM) {
+      leaveRoomBtn.disabled = false;
+      leaveRoomBtn.textContent = `「${ROOM}」から退出`;
+    } else {
+      leaveRoomBtn.disabled = true;
+      leaveRoomBtn.textContent = '参加中のルームはありません';
+    }
+  }
+
+  updateLeaveRoomButton();
+
   function updateCallParticipation(action) {
     if (!joined || !ROOM) return;
     socket.emit('call-participation', {
@@ -299,8 +313,35 @@
       passwordInput.value = '';
       setInteractionEnabled(true);
       refreshCallButtons();
+      updateLeaveRoomButton();
       inputEl.focus();
     });
+  }
+
+  function exitCurrentRoom(message, { clearLocal = false } = {}) {
+    const previousRoom = ROOM;
+    if (inCall) {
+      endCall();
+    }
+    joined = false;
+    setInteractionEnabled(false);
+    refreshCallButtons();
+    renderMessages([]);
+    renderParticipants([]);
+    renderRoomUsers([]);
+    appContent.classList.add('hidden');
+    joinModal.classList.remove('hidden');
+    if (message) {
+      joinError.textContent = message;
+    } else {
+      joinError.textContent = '';
+    }
+    if (clearLocal && previousRoom) {
+      clearLocalMessages(previousRoom);
+    }
+    ROOM = null;
+    updateLeaveRoomButton();
+    roomNameInput.focus();
   }
 
   async function handleCreateRoom() {
@@ -413,6 +454,7 @@
     openAdminBtn.addEventListener('click', () => {
       adminError.textContent = '';
       adminModal.classList.remove('hidden');
+      updateLeaveRoomButton();
       if (adminToken) {
         setAdminView(true);
         loadAdminRooms();
@@ -557,6 +599,29 @@
       adminError.textContent = 'ログアウトしました。';
       adminPasswordInput.value = '';
       adminPasswordInput.focus();
+    });
+  }
+
+  if (leaveRoomBtn) {
+    leaveRoomBtn.addEventListener('click', () => {
+      adminError.textContent = '';
+      if (!joined || !ROOM) {
+        adminError.textContent = '現在参加中のルームはありません。';
+        updateLeaveRoomButton();
+        return;
+      }
+      leaveRoomBtn.disabled = true;
+      socket.emit('leave-room', (response = {}) => {
+        leaveRoomBtn.disabled = false;
+        if (!response || response.ok !== true) {
+          const message = response && response.error ? response.error : 'ルームから退出できませんでした。';
+          adminError.textContent = message;
+          return;
+        }
+        adminError.textContent = 'ルームから退出しました。';
+        exitCurrentRoom('ルームから退出しました。');
+        fetchRooms();
+      });
     });
   }
 
@@ -714,6 +779,7 @@
       adminPanel.classList.add('hidden');
       adminLoginSection.classList.remove('hidden');
     }
+    updateLeaveRoomButton();
   }
 
   function renderAdminRooms(rooms) {
@@ -726,7 +792,7 @@
       return;
     }
 
-    rooms.forEach(({ name, password, createdAt }) => {
+    rooms.forEach(({ name, password, createdAt, blockedIps }) => {
       if (!name) return;
       const item = document.createElement('li');
       item.className = 'admin-room-item';
@@ -749,8 +815,56 @@
         info.appendChild(metaEl);
       }
 
+      const blockedSection = document.createElement('div');
+      blockedSection.className = 'blocked-ip-section';
+      const blockedTitle = document.createElement('span');
+      blockedTitle.className = 'title';
+      blockedTitle.textContent = 'ブロック中のIPアドレス';
+      blockedSection.appendChild(blockedTitle);
+      const blockedList = document.createElement('ul');
+      blockedList.className = 'blocked-ip-list';
+      const ips = Array.isArray(blockedIps) ? blockedIps : [];
+      if (ips.length === 0) {
+        const emptyBlocked = document.createElement('li');
+        emptyBlocked.className = 'empty';
+        emptyBlocked.textContent = '現在はありません。';
+        blockedList.appendChild(emptyBlocked);
+      } else {
+        ips.forEach((ip) => {
+          if (!ip) return;
+          const blockedItem = document.createElement('li');
+          const ipText = document.createElement('span');
+          ipText.textContent = ip;
+          blockedItem.appendChild(ipText);
+          const unblockBtn = document.createElement('button');
+          unblockBtn.type = 'button';
+          unblockBtn.className = 'secondary-button';
+          unblockBtn.textContent = '解除';
+          unblockBtn.addEventListener('click', () => {
+            unblockIpForRoom(name, ip);
+          });
+          blockedItem.appendChild(unblockBtn);
+          blockedList.appendChild(blockedItem);
+        });
+      }
+      blockedSection.appendChild(blockedList);
+      info.appendChild(blockedSection);
+
       const actions = document.createElement('div');
       actions.className = 'actions';
+      const blockBtn = document.createElement('button');
+      blockBtn.type = 'button';
+      blockBtn.className = 'secondary-button';
+      blockBtn.textContent = 'IPをブロック';
+      blockBtn.addEventListener('click', () => {
+        if (!adminToken) return;
+        const input = prompt(`ルーム「${name}」でブロックするIPアドレスを入力してください。`);
+        if (!input) {
+          return;
+        }
+        blockIpForRoom(name, input.trim());
+      });
+      actions.appendChild(blockBtn);
       const deleteBtn = document.createElement('button');
       deleteBtn.type = 'button';
       deleteBtn.className = 'danger';
@@ -822,6 +936,82 @@
     } catch (error) {
       console.warn('ルームの削除に失敗しました:', error);
       adminError.textContent = 'ルームの削除に失敗しました。';
+    }
+  }
+
+  async function blockIpForRoom(name, ip) {
+    if (!adminToken) return;
+    const trimmedIp = typeof ip === 'string' ? ip.trim() : '';
+    if (!trimmedIp) {
+      adminError.textContent = 'IPアドレスを入力してください。';
+      return;
+    }
+    adminError.textContent = '';
+    try {
+      const response = await fetch(`/api/admin/rooms/${encodeURIComponent(name)}/block-ip`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-token': adminToken,
+        },
+        body: JSON.stringify({ ip: trimmedIp }),
+      });
+      if (response.status === 401) {
+        adminToken = null;
+        setAdminView(false);
+        adminError.textContent = '認証の有効期限が切れました。再度ログインしてください。';
+        return;
+      }
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        const message = data && data.error ? data.error : 'IPアドレスのブロックに失敗しました。';
+        adminError.textContent = message;
+        return;
+      }
+      renderAdminRooms(data.rooms || []);
+      adminError.textContent = `IPアドレス「${trimmedIp}」をブロックしました。`;
+      fetchRooms();
+    } catch (error) {
+      console.warn('IPアドレスのブロックに失敗しました:', error);
+      adminError.textContent = 'IPアドレスのブロックに失敗しました。';
+    }
+  }
+
+  async function unblockIpForRoom(name, ip) {
+    if (!adminToken) return;
+    const targetIp = typeof ip === 'string' ? ip.trim() : '';
+    if (!targetIp) {
+      adminError.textContent = '解除するIPアドレスが無効です。';
+      return;
+    }
+    adminError.textContent = '';
+    try {
+      const response = await fetch(`/api/admin/rooms/${encodeURIComponent(name)}/block-ip`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-token': adminToken,
+        },
+        body: JSON.stringify({ ip: targetIp }),
+      });
+      if (response.status === 401) {
+        adminToken = null;
+        setAdminView(false);
+        adminError.textContent = '認証の有効期限が切れました。再度ログインしてください。';
+        return;
+      }
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        const message = data && data.error ? data.error : 'IPアドレスの解除に失敗しました。';
+        adminError.textContent = message;
+        return;
+      }
+      renderAdminRooms(data.rooms || []);
+      adminError.textContent = `IPアドレス「${targetIp}」のブロックを解除しました。`;
+      fetchRooms();
+    } catch (error) {
+      console.warn('IPアドレスの解除に失敗しました:', error);
+      adminError.textContent = 'IPアドレスの解除に失敗しました。';
     }
   }
 
@@ -904,21 +1094,15 @@
     if (room) {
       clearLocalMessages(room);
       if (ROOM === room) {
-        if (inCall) {
-          endCall();
-        }
-        joined = false;
-        ROOM = null;
-        setInteractionEnabled(false);
-        refreshCallButtons();
-        renderMessages([]);
-        renderParticipants([]);
-        renderRoomUsers([]);
-        appContent.classList.add('hidden');
-        joinModal.classList.remove('hidden');
-        joinError.textContent = '参加中のルームは管理者により削除されました。別のルームを選択してください。';
-        roomNameInput.focus();
+        exitCurrentRoom('参加中のルームは管理者により削除されました。別のルームを選択してください。');
       }
+    }
+    fetchRooms();
+  });
+
+  socket.on('room-blocked', ({ room } = {}) => {
+    if (room && ROOM === room) {
+      exitCurrentRoom('このルームへの参加は管理者によってブロックされました。');
     }
     fetchRooms();
   });

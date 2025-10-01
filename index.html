@@ -14,6 +14,9 @@
     .admin-button { background: rgba(255, 255, 255, 0.18); color: #fff; border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 999px; padding: 0.5rem 1rem; font-size: 0.95rem; cursor: pointer; transition: background 0.2s ease; }
     .admin-button:hover { background: rgba(255, 255, 255, 0.3); }
     .admin-button:focus { outline: 2px solid rgba(255, 255, 255, 0.7); outline-offset: 2px; }
+    .secondary-button { background: #ffffff; color: #1976d2; border: 1px solid #1976d2; border-radius: 0.5rem; padding: 0.5rem 0.85rem; cursor: pointer; transition: background 0.2s ease, color 0.2s ease; }
+    .secondary-button:hover { background: #e3f2fd; }
+    .secondary-button:disabled { background: #eceff1; color: #90a4ae; border-color: #cfd8dc; cursor: not-allowed; }
     main { display: flex; flex-direction: column; min-height: calc(100vh - 64px); }
     main.hidden { display: none; }
     #profile { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; background: #fff; border-bottom: 1px solid #e0e0e0; }
@@ -86,14 +89,21 @@
     #adminRoomList li.empty { text-align: center; color: #666; font-style: italic; background: #f5f5f5; padding: 0.75rem; border-radius: 0.5rem; }
     .admin-room-list-wrapper { display: flex; flex-direction: column; gap: 0.75rem; }
     .admin-room-list-wrapper h3 { margin: 0; font-size: 1.1rem; }
-    .admin-room-item { display: flex; justify-content: space-between; gap: 1rem; background: #f1f8e9; border-radius: 0.75rem; padding: 0.75rem 1rem; align-items: flex-start; }
-    .admin-room-item .info { display: flex; flex-direction: column; gap: 0.3rem; }
+    .admin-room-item { display: flex; justify-content: space-between; gap: 1rem; background: #f1f8e9; border-radius: 0.75rem; padding: 0.75rem 1rem; align-items: stretch; flex-wrap: wrap; }
+    .admin-room-item .info { display: flex; flex-direction: column; gap: 0.3rem; flex: 1 1 200px; }
     .admin-room-item .name { font-weight: bold; font-size: 1.05rem; color: #1b5e20; }
     .admin-room-item .password { font-size: 0.95rem; color: #33691e; }
     .admin-room-item .meta { font-size: 0.8rem; color: #607d8b; }
-    .admin-room-item .actions { display: flex; gap: 0.5rem; }
+    .admin-room-item .actions { display: flex; gap: 0.5rem; flex: 0 0 auto; align-items: flex-start; }
     .admin-room-item .actions .danger { background: #e53935; color: #fff; border: none; border-radius: 0.5rem; padding: 0.5rem 0.85rem; cursor: pointer; }
     .admin-room-item .actions .danger:hover { background: #c62828; }
+    .admin-room-item .actions .secondary-button { font-size: 0.9rem; }
+    .blocked-ip-section { margin-top: 0.5rem; background: #ffffff; border-radius: 0.5rem; padding: 0.6rem 0.75rem; display: flex; flex-direction: column; gap: 0.4rem; box-shadow: inset 0 0 0 1px rgba(76, 175, 80, 0.15); }
+    .blocked-ip-section .title { font-size: 0.85rem; color: #2e7d32; font-weight: bold; }
+    .blocked-ip-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.35rem; }
+    .blocked-ip-list li { display: flex; justify-content: space-between; align-items: center; background: #fce4ec; border-radius: 0.5rem; padding: 0.35rem 0.6rem; font-size: 0.85rem; color: #ad1457; }
+    .blocked-ip-list li.empty { justify-content: flex-start; background: #f9f9f9; color: #666; font-style: italic; }
+    .blocked-ip-list button { font-size: 0.8rem; padding: 0.25rem 0.55rem; }
     #adminError { color: #d32f2f; min-height: 1.2em; margin: 0; }
     @media (max-width: 768px) {
       #chatLayout { flex-direction: column; }
@@ -179,6 +189,7 @@
     <div class="modal-content">
       <button id="closeAdmin" type="button" aria-label="閉じる">×</button>
       <h2>ルーム管理</h2>
+      <button id="leaveRoomBtn" type="button" class="secondary-button">参加中のルームはありません</button>
       <section id="adminLoginSection">
         <label>
           管理者パスワード
