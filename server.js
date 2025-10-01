@@ -50,6 +50,7 @@ const roomBlockedIps = new Map();
 
 const MAX_MESSAGES_PER_ROOM = 500;
 const MAX_MEMBERS_PER_ROOM = 5;
+const MAX_CALL_PARTICIPANTS = 5;
 const MAX_ICON_DATA_URL_LENGTH = 120000; // ~120 KB upper bound for profile icons
 const DEFAULT_ROOMS = [
   { name: 'global', password: 'global' },
@@ -522,7 +523,24 @@ io.on('connection', (socket) => {
     if (!targetRoom) {
       return;
     }
-    socket.to(targetRoom).emit('webrtc', { sender: socket.id, data });
+    const sockets = roomSockets.get(targetRoom);
+    if (!sockets || !sockets.has(socket.id)) {
+      return;
+    }
+    if (!data || typeof data !== 'object') {
+      return;
+    }
+    const payloadData = { ...data };
+    const payload = { sender: socket.id, data: payloadData };
+    const targetId = typeof payloadData.target === 'string' ? payloadData.target : null;
+    if (targetId) {
+      if (!sockets.has(targetId)) {
+        return;
+      }
+      io.to(targetId).emit('webrtc', payload);
+      return;
+    }
+    socket.to(targetRoom).emit('webrtc', payload);
   });
 
   socket.on('call-participation', (data = {}) => {
@@ -548,6 +566,12 @@ io.on('connection', (socket) => {
         }
       }
     } else if (action === 'join' || action === 'update') {
+      const alreadyParticipant = participants.has(socket.id);
+      if (!alreadyParticipant && participants.size >= MAX_CALL_PARTICIPANTS) {
+        socket.emit('system', `通話は最大${MAX_CALL_PARTICIPANTS}人までです。`);
+        socket.emit('call-participants', Array.from(participants.values()));
+        return;
+      }
       const existingProfile = profile;
       const nameFromData = typeof data.user === 'string' && data.user.trim() ? data.user.trim() : undefined;
       let iconProvided = Object.prototype.hasOwnProperty.call(data, 'icon');

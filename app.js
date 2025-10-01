@@ -59,13 +59,17 @@
   let joined = false;
   let inCall = false;
   let localAudioEl = null;
-  let remoteAudioEl = null;
+  const remoteAudioElements = new Map();
+  const peerConnections = new Map();
+  const pendingIceCandidates = new Map();
+  let acquiringLocalStream = null;
   let notificationPermission = typeof Notification !== 'undefined' ? Notification.permission : 'default';
 
   const LOCAL_MESSAGE_LIMIT = 500;
   let pendingScrollToBottom = false;
   let iconStatusTimer = null;
   let currentRoomUsers = [];
+  let latestCallParticipants = [];
 
   function persistUserIcon(icon) {
     try {
@@ -332,6 +336,7 @@
   }
 
   function renderParticipants(participants) {
+    latestCallParticipants = Array.isArray(participants) ? participants : [];
     participantListEl.innerHTML = '';
     if (!Array.isArray(participants) || participants.length === 0) {
       const emptyItem = document.createElement('li');
@@ -1394,6 +1399,27 @@
 
   socket.on('call-participants', (participants) => {
     renderParticipants(participants);
+    if (Array.isArray(participants)) {
+      const activeIds = new Set();
+      participants.forEach(({ id }) => {
+        if (typeof id === 'string') {
+          activeIds.add(id);
+        }
+      });
+      Array.from(peerConnections.keys()).forEach((peerId) => {
+        if (!activeIds.has(peerId)) {
+          removePeerConnection(peerId);
+        }
+      });
+      if (!activeIds.has(socket.id) && inCall) {
+        endCall({ notifyPeers: false, notifyServer: false });
+      }
+    }
+    if (inCall) {
+      connectToExistingParticipants().catch((error) => {
+        console.error('Failed to connect to participants after update:', error);
+      });
+    }
   });
 
   socket.on('room-users', (users) => {
@@ -1485,145 +1511,315 @@
 
   // ---------- WebRTC VOICE CALL -----------
   let localStream = null;
-  let peerConnection = null;
-  const iceServers = { iceServers: [ { urls: 'stun:stun.l.google.com:19302' } ] };
+  const iceServers = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
-  async function startCall() {
-    if (!joined) {
-      alert('ルームに参加してから通話を開始してください。');
+  function cleanupRemoteAudio(peerId) {
+    if (!peerId) return;
+    const el = remoteAudioElements.get(peerId);
+    if (el) {
+      cleanupAudioElement(el);
+      remoteAudioElements.delete(peerId);
+    }
+  }
+
+  function removePeerConnection(peerId) {
+    if (!peerId) return;
+    const pc = peerConnections.get(peerId);
+    if (!pc) {
+      cleanupRemoteAudio(peerId);
+      pendingIceCandidates.delete(peerId);
       return;
     }
-    startCallBtn.disabled = true;
-    endCallBtn.disabled = false;
-    // Get local audio stream
+    peerConnections.delete(peerId);
+    pendingIceCandidates.delete(peerId);
+    cleanupRemoteAudio(peerId);
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (err) {
-      alert('マイクへのアクセスに失敗しました: ' + err);
-      refreshCallButtons();
-      return;
+      pc.close();
+    } catch (error) {
+      console.warn('Failed to close peer connection:', error);
     }
+  }
+
+  function removeAllPeerConnections() {
+    Array.from(peerConnections.keys()).forEach((peerId) => {
+      removePeerConnection(peerId);
+    });
+    peerConnections.clear();
+    pendingIceCandidates.clear();
+  }
+
+  async function getLocalStream() {
+    if (localStream) {
+      return localStream;
+    }
+    if (!joined || !ROOM) {
+      throw new Error('ルームに参加していません。');
+    }
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+      throw new Error('お使いのブラウザは音声通話に対応していません。');
+    }
+    if (!acquiringLocalStream) {
+      acquiringLocalStream = navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+    let stream;
+    try {
+      stream = await acquiringLocalStream;
+    } catch (error) {
+      acquiringLocalStream = null;
+      throw error;
+    }
+    acquiringLocalStream = null;
+    localStream = stream;
     cleanupAudioElement(localAudioEl);
     localAudioEl = attachAudioElement(localStream, { muted: true });
-    // Create peer connection
-    peerConnection = new RTCPeerConnection(iceServers);
-    localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
-    // When remote track arrives, play it
-    peerConnection.addEventListener('track', (event) => {
+    return localStream;
+  }
+
+  function flushPendingCandidates(peerId, pc) {
+    const queued = pendingIceCandidates.get(peerId);
+    if (!queued || !queued.length) {
+      return;
+    }
+    queued.forEach((candidateInit) => {
+      try {
+        pc.addIceCandidate(new RTCIceCandidate(candidateInit)).catch((error) => {
+          console.warn('Failed to apply queued ICE candidate:', error);
+        });
+      } catch (error) {
+        console.warn('Failed to queue ICE candidate:', error);
+      }
+    });
+    pendingIceCandidates.delete(peerId);
+  }
+
+  async function preparePeerConnection(peerId) {
+    if (!peerId || peerId === socket.id) {
+      return null;
+    }
+    let pc = peerConnections.get(peerId);
+    if (pc) {
+      return pc;
+    }
+    const stream = await getLocalStream();
+    pc = new RTCPeerConnection(iceServers);
+    stream.getTracks().forEach((track) => {
+      pc.addTrack(track, stream);
+    });
+    pc.addEventListener('track', (event) => {
       const [remoteStream] = event.streams;
       if (!remoteStream) return;
-      cleanupAudioElement(remoteAudioEl);
-      remoteAudioEl = attachAudioElement(remoteStream);
+      cleanupRemoteAudio(peerId);
+      const audioEl = attachAudioElement(remoteStream);
+      remoteAudioElements.set(peerId, audioEl);
     });
-    // ICE candidates
-    peerConnection.addEventListener('icecandidate', (event) => {
-      if (event.candidate) {
-        socket.emit('webrtc', { room: ROOM, data: { type: 'candidate', candidate: event.candidate } });
+    pc.addEventListener('icecandidate', (event) => {
+      if (event.candidate && joined && ROOM) {
+        socket.emit('webrtc', {
+          room: ROOM,
+          data: { type: 'candidate', candidate: event.candidate, target: peerId },
+        });
       }
     });
-    // Create and send offer
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
-    socket.emit('webrtc', { room: ROOM, data: { type: 'offer', sdp: offer } });
-    const action = inCall ? 'update' : 'join';
-    inCall = true;
-    refreshCallButtons();
-    updateCallParticipation(action);
+    pc.addEventListener('connectionstatechange', () => {
+      if (['failed', 'closed'].includes(pc.connectionState)) {
+        removePeerConnection(peerId);
+      }
+    });
+    peerConnections.set(peerId, pc);
+    return pc;
   }
 
-  async function handleOffer(sdp) {
-    if (!peerConnection) {
-      peerConnection = new RTCPeerConnection(iceServers);
-      // When remote track arrives
-      peerConnection.addEventListener('track', (event) => {
-        const [remoteStream] = event.streams;
-        if (!remoteStream) return;
-        cleanupAudioElement(remoteAudioEl);
-        remoteAudioEl = attachAudioElement(remoteStream);
-      });
-      peerConnection.addEventListener('icecandidate', (event) => {
-        if (event.candidate) {
-          socket.emit('webrtc', { room: ROOM, data: { type: 'candidate', candidate: event.candidate } });
-        }
-      });
-      // Get local audio stream when answering
-      try {
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch (err) {
-        alert('マイクへのアクセスに失敗しました: ' + err);
+  async function connectToExistingParticipants() {
+    if (!joined || !ROOM) {
+      return;
+    }
+    if (!Array.isArray(latestCallParticipants) || latestCallParticipants.length === 0) {
+      return;
+    }
+    for (const participant of latestCallParticipants) {
+      if (!participant || typeof participant.id !== 'string') continue;
+      const peerId = participant.id;
+      if (peerId === socket.id) continue;
+      if (socket.id < peerId && !peerConnections.has(peerId)) {
+        await createOfferForPeer(peerId);
+      }
+    }
+  }
+
+  async function ensureCallActive({ notifyPeers = false, updateStatus = false } = {}) {
+    const alreadyInCall = inCall;
+    await getLocalStream();
+    if (!alreadyInCall) {
+      inCall = true;
+      refreshCallButtons();
+      updateCallParticipation('join');
+      await connectToExistingParticipants();
+    } else if (updateStatus) {
+      updateCallParticipation('update');
+    }
+    if (notifyPeers && joined && ROOM) {
+      socket.emit('webrtc', { room: ROOM, data: { type: 'call-ready' } });
+    }
+  }
+
+  async function createOfferForPeer(peerId) {
+    try {
+      const pc = await preparePeerConnection(peerId);
+      if (!pc) return;
+      if (pc.signalingState === 'have-local-offer') {
         return;
       }
-      localStream.getTracks().forEach((track) => peerConnection.addTrack(track, localStream));
-      cleanupAudioElement(localAudioEl);
-      localAudioEl = attachAudioElement(localStream, { muted: true });
-    }
-    await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
-    const answer = await peerConnection.createAnswer();
-    await peerConnection.setLocalDescription(answer);
-    socket.emit('webrtc', { room: ROOM, data: { type: 'answer', sdp: answer } });
-    startCallBtn.disabled = true;
-    endCallBtn.disabled = false;
-    const action = inCall ? 'update' : 'join';
-    inCall = true;
-    refreshCallButtons();
-    updateCallParticipation(action);
-  }
-
-  async function handleAnswer(sdp) {
-    if (!peerConnection) return;
-    await peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
-  }
-
-  function handleCandidate(candidate) {
-    if (peerConnection) {
-      peerConnection.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.emit('webrtc', { room: ROOM, data: { type: 'offer', sdp: offer, target: peerId } });
+    } catch (error) {
+      console.error('Failed to create offer for peer:', peerId, error);
     }
   }
 
-  function endCall() {
-    if (peerConnection) {
-      peerConnection.getSenders().forEach((sender) => sender.track && sender.track.stop());
-      peerConnection.close();
-      peerConnection = null;
+  async function handleCallReady(peerId) {
+    if (!peerId || peerId === socket.id) return;
+    if (!inCall) {
+      return;
     }
+    if (!(socket.id < peerId)) {
+      return;
+    }
+    if (peerConnections.has(peerId)) {
+      return;
+    }
+    try {
+      await ensureCallActive();
+      await createOfferForPeer(peerId);
+    } catch (error) {
+      console.error('Failed to respond to call-ready from', peerId, error);
+    }
+  }
+
+  async function handleOffer(peerId, sdp) {
+    if (!peerId || !sdp) return;
+    try {
+      await ensureCallActive();
+    } catch (error) {
+      console.error('Failed to prepare for incoming offer:', error);
+      return;
+    }
+    try {
+      const pc = await preparePeerConnection(peerId);
+      if (!pc) return;
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      flushPendingCandidates(peerId, pc);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socket.emit('webrtc', { room: ROOM, data: { type: 'answer', sdp: answer, target: peerId } });
+      inCall = true;
+      refreshCallButtons();
+    } catch (error) {
+      console.error('Error handling offer from', peerId, error);
+    }
+  }
+
+  async function handleAnswer(peerId, sdp) {
+    if (!peerId || !sdp) return;
+    const pc = peerConnections.get(peerId);
+    if (!pc) return;
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      flushPendingCandidates(peerId, pc);
+    } catch (error) {
+      console.error('Error applying answer from', peerId, error);
+    }
+  }
+
+  function handleCandidate(peerId, candidate) {
+    if (!peerId || !candidate) return;
+    const pc = peerConnections.get(peerId);
+    if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+      pc.addIceCandidate(new RTCIceCandidate(candidate)).catch((error) => {
+        console.warn('Failed to add ICE candidate from', peerId, error);
+      });
+      return;
+    }
+    const queued = pendingIceCandidates.get(peerId) || [];
+    queued.push(candidate);
+    pendingIceCandidates.set(peerId, queued);
+  }
+
+  function handleRemoteHangup(peerId) {
+    if (!peerId || peerId === socket.id) return;
+    removePeerConnection(peerId);
+  }
+
+  function endCall({ notifyPeers = true, notifyServer = true } = {}) {
+    removeAllPeerConnections();
+    remoteAudioElements.forEach((el) => {
+      cleanupAudioElement(el);
+    });
+    remoteAudioElements.clear();
     if (localStream) {
-      localStream.getTracks().forEach((track) => track.stop());
+      localStream.getTracks().forEach((track) => {
+        try {
+          track.stop();
+        } catch (error) {
+          console.warn('Failed to stop local track:', error);
+        }
+      });
       localStream = null;
     }
+    acquiringLocalStream = null;
     cleanupAudioElement(localAudioEl);
-    cleanupAudioElement(remoteAudioEl);
     localAudioEl = null;
-    remoteAudioEl = null;
-    if (inCall) {
+    if (inCall && notifyServer) {
       updateCallParticipation('leave');
     }
     inCall = false;
     refreshCallButtons();
+    if (notifyPeers && joined && ROOM) {
+      socket.emit('webrtc', { room: ROOM, data: { type: 'hangup' } });
+    }
   }
 
-  startCallBtn.addEventListener('click', () => {
-    startCall();
+  startCallBtn.addEventListener('click', async () => {
+    startCallBtn.disabled = true;
+    try {
+      await ensureCallActive({ notifyPeers: true, updateStatus: true });
+    } catch (error) {
+      console.error('Failed to start call:', error);
+      const message = error && error.message ? error.message : String(error || '不明なエラー');
+      alert('マイクへのアクセスに失敗しました: ' + message);
+      endCall({ notifyPeers: false, notifyServer: false });
+    } finally {
+      refreshCallButtons();
+    }
   });
+
   endCallBtn.addEventListener('click', () => {
     endCall();
-    // Notify others to end call (not strictly necessary here)
-    socket.emit('webrtc', { room: ROOM, data: { type: 'hangup' } });
   });
 
   // Handle incoming WebRTC signaling
-  socket.on('webrtc', ({ sender, data }) => {
+  socket.on('webrtc', async ({ sender, data }) => {
+    if (!data || !sender || sender === socket.id) {
+      return;
+    }
+    if (data.target && data.target !== socket.id) {
+      return;
+    }
     switch (data.type) {
+      case 'call-ready':
+        await handleCallReady(sender);
+        break;
       case 'offer':
-        handleOffer(data.sdp);
+        await handleOffer(sender, data.sdp);
         break;
       case 'answer':
-        handleAnswer(data.sdp);
+        await handleAnswer(sender, data.sdp);
         break;
       case 'candidate':
-        handleCandidate(data.candidate);
+        handleCandidate(sender, data.candidate);
         break;
       case 'hangup':
-        endCall();
+        handleRemoteHangup(sender);
         break;
     }
   });
