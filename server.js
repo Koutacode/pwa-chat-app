@@ -42,6 +42,7 @@ const roomMembers = new Map();
 const roomBlockedIps = new Map();
 
 const MAX_MESSAGES_PER_ROOM = 500;
+const MAX_MEMBERS_PER_ROOM = 5;
 const DEFAULT_ROOMS = [
   { name: 'global', password: 'global' },
 ];
@@ -383,13 +384,19 @@ io.on('connection', (socket) => {
     }
 
     const ids = roomSockets.get(roomName);
+    const members = roomMembers.get(roomName);
+
+    if (members.size >= MAX_MEMBERS_PER_ROOM && !members.has(socket.id)) {
+      if (callback) callback({ ok: false, error: `このルームは満員です。(最大${MAX_MEMBERS_PER_ROOM}人)` });
+      return;
+    }
+
     ids.add(socket.id);
     socket.join(roomName);
 
     const profile = { user: rawName, icon, room: roomName };
     userProfiles.set(socket.id, profile);
 
-    const members = roomMembers.get(roomName);
     members.set(socket.id, { id: socket.id, user: rawName, icon });
 
     // Notify others with a friendlier name when available
