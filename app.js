@@ -341,6 +341,9 @@
     }
     ROOM = null;
     updateLeaveRoomButton();
+    if (adminModal) {
+      adminModal.classList.add('hidden');
+    }
     roomNameInput.focus();
   }
 
@@ -580,25 +583,43 @@
 
   if (adminLogoutBtn) {
     adminLogoutBtn.addEventListener('click', async () => {
-      if (!adminToken) {
-        adminModal.classList.add('hidden');
-        return;
+      adminError.textContent = '';
+
+      if (adminToken) {
+        try {
+          await fetch('/api/admin/logout', {
+            method: 'POST',
+            headers: {
+              'x-admin-token': adminToken,
+            },
+          });
+        } catch (error) {
+          console.warn('ログアウト処理に失敗しました:', error);
+        }
       }
-      try {
-        await fetch('/api/admin/logout', {
-          method: 'POST',
-          headers: {
-            'x-admin-token': adminToken,
-          },
-        });
-      } catch (error) {
-        console.warn('ログアウト処理に失敗しました:', error);
-      }
+
       adminToken = null;
       setAdminView(false);
-      adminError.textContent = 'ログアウトしました。';
       adminPasswordInput.value = '';
-      adminPasswordInput.focus();
+
+      const completeLogout = () => {
+        adminError.textContent = 'ログアウトしました。';
+        exitCurrentRoom('ログアウトしました。再度ルームを選択してください。');
+      };
+
+      if (joined && ROOM) {
+        socket.emit('leave-room', (response = {}) => {
+          if (!response || response.ok !== true) {
+            const message = response && response.error ? response.error : 'ルームから退出できませんでした。';
+            adminError.textContent = message;
+            return;
+          }
+          completeLogout();
+          fetchRooms();
+        });
+      } else {
+        completeLogout();
+      }
     });
   }
 
