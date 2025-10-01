@@ -21,18 +21,22 @@
     .secondary-button:disabled { background: #eceff1; color: #90a4ae; border-color: #cfd8dc; cursor: not-allowed; }
     main { display: flex; flex-direction: column; min-height: calc(100vh - 64px); }
     main.hidden { display: none; }
-    #profile { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; background: #fff; border-bottom: 1px solid #e0e0e0; }
-    #profile label { font-size: 0.9rem; display: flex; flex-direction: column; gap: 0.25rem; }
-    #profile input[type=file] { max-width: 200px; }
+    #profile { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; background: #fff; border-bottom: 1px solid #e0e0e0; flex-wrap: wrap; }
+    #profile .icon-editor { display: flex; align-items: center; gap: 0.75rem; }
+    #profile .icon-editor label { font-size: 0.9rem; display: flex; flex-direction: column; gap: 0.25rem; }
+    #profile .icon-editor input[type=file] { max-width: 200px; }
     #iconPreview { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; background: #ddd; }
-    #profile .location-info { margin-left: auto; }
+    #profile .profile-status { flex: 1 1 100%; margin: 0; font-size: 0.8rem; color: #2e7d32; min-height: 1.2em; }
+    #profile .profile-status.error { color: #d32f2f; }
     #chatLayout { display: flex; flex: 1; gap: 1rem; padding: 1rem; box-sizing: border-box; }
     #chatPanel { flex: 1; display: flex; flex-direction: column; gap: 1rem; }
     #roomUsers { width: 220px; background: #fff; border-radius: 0.75rem; padding: 1rem; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); display: flex; flex-direction: column; gap: 0.5rem; }
     #roomUsers h2 { margin: 0; font-size: 1rem; color: #333; }
     #roomUserList { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.5rem; }
-    #roomUserList li { background: #fff6e8; border-radius: 999px; padding: 0.5rem 0.75rem; font-size: 0.9rem; color: #5d4037; }
-    #roomUserList li.empty { text-align: center; color: #777; font-style: italic; background: #f5f5f5; }
+    #roomUserList li { display: flex; align-items: center; gap: 0.5rem; background: #fff6e8; border-radius: 999px; padding: 0.5rem 0.75rem; font-size: 0.9rem; color: #5d4037; }
+    #roomUserList li img { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; background: #cfd8dc; flex-shrink: 0; }
+    #roomUserList li span { flex: 1 1 auto; }
+    #roomUserList li.empty { justify-content: center; text-align: center; color: #777; font-style: italic; background: #f5f5f5; }
     #roomUserList li.self { font-weight: bold; background: #e8f5e9; color: #1b5e20; }
     #chat { padding: 1rem; flex: 1; overflow-y: auto; background: white; border-radius: 0.75rem; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
     #messages { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.75rem; }
@@ -124,11 +128,14 @@
   </header>
   <main id="appContent" class="hidden">
     <section id="profile">
-      <label>
-        アイコンを選択
-        <input id="iconInput" type="file" accept="image/*" />
-      </label>
-      <img id="iconPreview" src="icon-192.png" alt="アイコンのプレビュー" />
+      <div class="icon-editor">
+        <label>
+          アイコンを選択
+          <input id="iconInput" type="file" accept="image/*" />
+        </label>
+        <img id="iconPreview" src="icon-192.png" alt="アイコンのプレビュー" />
+      </div>
+      <p id="iconStatus" class="profile-status" aria-live="polite"></p>
     </section>
 
     <section id="chatLayout">
