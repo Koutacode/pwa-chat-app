@@ -8,6 +8,7 @@ This is a minimal progressive web app (PWA) that demonstrates how to build a sim
 - **Group chat:** All connected clients join the same room; extend the implementation to support multiple rooms or private groups.
 - **Voice calls:** Users can initiate a peer‑to‑peer voice call using the browser’s WebRTC API. Signaling is handled via Socket.io.
 - **PWA functionality:** The app registers a service worker, provides a manifest, and can be installed on supported mobile and desktop platforms. It also supports basic offline caching of static assets.
+- **Live location map:** Location shares (one-time or continuous) update a Leaflet-powered map embedded next to the chat so you can follow the most recent coordinates without leaving the conversation.
 
 ## Getting Started
 
@@ -31,6 +32,8 @@ npm start
 
 3. Open your browser at [http://localhost:3000](http://localhost:3000) to access the app.
 
+The live map uses [Leaflet](https://leafletjs.com/) via its public CDN tiles. An active internet connection is required when running the app to load the library and map tiles.
+
 ### Running in Production
 
 For production deployments you should:
@@ -43,6 +46,8 @@ For production deployments you should:
 
 ```
 pwa-chat-app/
+├── docs/
+│   └── manual-tests.md   # Manual regression scenarios (e.g. location sharing)
 ├── public/
 │   ├── app.js            # Client‑side chat and WebRTC logic
 │   ├── icon-192.png      # App icon (192×192)
@@ -54,6 +59,10 @@ pwa-chat-app/
 ├── package.json          # Project configuration
 └── README.md             # This file
 ```
+
+## Manual Regression Checks
+
+Manual QA scripts are stored under [`docs/manual-tests.md`](docs/manual-tests.md). They include a regression flow that confirms text chat stays usable while continuous location sharing is active.
 
 ## License
 

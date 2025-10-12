@@ -49,6 +49,9 @@
   const newMessagesButton = document.getElementById('newMessagesButton');
   const typingIndicatorEl = document.getElementById('typingIndicator');
   const connectionBanner = document.getElementById('connectionBanner');
+  const liveMapPanel = document.getElementById('liveMapPanel');
+  const liveMapContainer = document.getElementById('liveMap');
+  const liveMapStatusEl = document.getElementById('liveMapStatus');
   const adminModal = document.getElementById('adminModal');
   const adminCloseBtn = document.getElementById('closeAdmin');
   const adminLoginSection = document.getElementById('adminLoginSection');
@@ -101,6 +104,192 @@
   let lastContinuousLocationUpdate = 0;
   let hasSentInitialContinuousLocationMessage = false;
   const CONTINUOUS_LOCATION_MIN_INTERVAL = 15000;
+  const DEFAULT_MAP_CENTER = [35.681236, 139.767125];
+  const DEFAULT_MAP_ZOOM = 5;
+  let liveMap = null;
+  let liveMapMarkersLayer = null;
+  const liveMapMarkers = new Map();
+  let pendingLiveMapMessages = null;
+
+  function setLiveMapStatus(message) {
+    if (!liveMapStatusEl) return;
+    liveMapStatusEl.textContent = message || '';
+  }
+
+  function ensureLiveMapReady() {
+    if (!liveMapContainer) {
+      return false;
+    }
+    if (typeof window.L === 'undefined') {
+      setLiveMapStatus('マップを読み込めませんでした。ネットワーク接続を確認してページを再読み込みしてください。');
+      return false;
+    }
+    let initialised = false;
+    if (!liveMap) {
+      try {
+        liveMap = window.L.map(liveMapContainer, {
+          center: DEFAULT_MAP_CENTER,
+          zoom: DEFAULT_MAP_ZOOM,
+          zoomControl: true,
+        });
+        liveMapMarkersLayer = window.L.layerGroup().addTo(liveMap);
+        window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+          maxZoom: 19,
+        }).addTo(liveMap);
+        refreshLiveMapSize();
+        setLiveMapStatus(joined ? '位置情報が共有されるとここに表示されます。' : 'ルームに参加すると位置情報が表示されます。');
+        initialised = true;
+      } catch (error) {
+        console.warn('Failed to initialise live map:', error);
+        setLiveMapStatus('ライブマップを初期化できませんでした。ネットワーク接続を確認してください。');
+        liveMap = null;
+        liveMapMarkersLayer = null;
+        return false;
+      }
+    }
+    if (initialised && Array.isArray(pendingLiveMapMessages) && pendingLiveMapMessages.length > 0) {
+      const messagesToReplay = pendingLiveMapMessages.slice();
+      pendingLiveMapMessages = null;
+      rebuildLiveMapFromMessages(messagesToReplay);
+    }
+    return Boolean(liveMap);
+  }
+
+  function refreshLiveMapSize() {
+    if (!liveMap) return;
+    requestAnimationFrame(() => {
+      if (liveMap) {
+        liveMap.invalidateSize();
+      }
+    });
+  }
+
+  function resetLiveMapView() {
+    if (!liveMap) return;
+    liveMap.setView(DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM);
+  }
+
+  function updateLiveMapVisibility() {
+    if (!liveMapPanel) return;
+    liveMapPanel.classList.toggle('is-empty', liveMapMarkers.size === 0);
+  }
+
+  function clearLiveMapMarkers({ announce = true } = {}) {
+    if (liveMapMarkersLayer) {
+      liveMapMarkersLayer.clearLayers();
+    }
+    liveMapMarkers.clear();
+    updateLiveMapVisibility();
+    if (announce) {
+      setLiveMapStatus(joined ? '位置情報が共有されるとここに表示されます。' : 'ルームに参加すると位置情報が表示されます。');
+    }
+    resetLiveMapView();
+  }
+
+  function focusLiveMapOnMarkers() {
+    if (!liveMap || liveMapMarkers.size === 0) {
+      resetLiveMapView();
+      return;
+    }
+    const latLngs = [];
+    liveMapMarkers.forEach((marker) => {
+      if (!marker) return;
+      const latLng = marker.getLatLng();
+      if (latLng) {
+        latLngs.push(latLng);
+      }
+    });
+    if (latLngs.length === 0) {
+      resetLiveMapView();
+      return;
+    }
+    if (latLngs.length === 1) {
+      liveMap.setView(latLngs[0], Math.max(liveMap.getZoom(), 15));
+      return;
+    }
+    const bounds = window.L.latLngBounds(latLngs);
+    liveMap.fitBounds(bounds, { padding: [32, 32], maxZoom: 16 });
+  }
+
+  function upsertLiveMapMarker({ user, location } = {}, { focus = true, announce = true } = {}) {
+    if (!location || typeof location.latitude !== 'number' || typeof location.longitude !== 'number') {
+      return false;
+    }
+    if (!ensureLiveMapReady()) {
+      return false;
+    }
+    const latLng = [location.latitude, location.longitude];
+    const key = user || 'anonymous';
+    let marker = liveMapMarkers.get(key);
+    if (!marker) {
+      marker = window.L.marker(latLng, {
+        title: user ? `${user}の現在地` : '共有された現在地',
+      });
+      marker.addTo(liveMapMarkersLayer);
+      liveMapMarkers.set(key, marker);
+    } else {
+      marker.setLatLng(latLng);
+    }
+    if (user) {
+      marker.bindPopup(`${user}の最新の位置`);
+    } else {
+      marker.bindPopup('共有された位置情報');
+    }
+    if (announce) {
+      const displayUser = user || 'ユーザー';
+      setLiveMapStatus(`${displayUser}が位置情報を共有しました。`);
+    }
+    updateLiveMapVisibility();
+    if (focus) {
+      focusLiveMapOnMarkers();
+    }
+    return true;
+  }
+
+  function rebuildLiveMapFromMessages(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) {
+      pendingLiveMapMessages = null;
+      if (liveMap) {
+        clearLiveMapMarkers();
+      } else {
+        setLiveMapStatus(joined ? '位置情報が共有されるとここに表示されます。' : 'ルームに参加すると位置情報が表示されます。');
+      }
+      return;
+    }
+    pendingLiveMapMessages = messages;
+    if (!ensureLiveMapReady()) {
+      return;
+    }
+    pendingLiveMapMessages = null;
+    clearLiveMapMarkers({ announce: false });
+    let applied = 0;
+    messages.forEach((message) => {
+      if (!message || typeof message !== 'object') return;
+      const user = typeof message.user === 'string' ? message.user : '';
+      const rawLocation = message.location && typeof message.location === 'object' ? message.location : null;
+      const latitude = rawLocation && typeof rawLocation.latitude === 'number' ? rawLocation.latitude : null;
+      const longitude = rawLocation && typeof rawLocation.longitude === 'number' ? rawLocation.longitude : null;
+      if (latitude === null || longitude === null) {
+        return;
+      }
+      const updated = upsertLiveMapMarker({ user, location: { latitude, longitude } }, { focus: false, announce: false });
+      if (updated) {
+        applied += 1;
+      }
+    });
+    updateLiveMapVisibility();
+    if (applied > 0) {
+      setLiveMapStatus('最新の位置情報を表示しています。');
+      focusLiveMapOnMarkers();
+    } else if (joined) {
+      setLiveMapStatus('まだ位置情報は共有されていません。');
+    } else {
+      setLiveMapStatus('ルームに参加すると位置情報が表示されます。');
+    }
+  }
+
+  window.addEventListener('resize', refreshLiveMapSize);
 
   function updateContinuousLocationUI(active) {
     if (!toggleLocationShareBtn) return;
@@ -137,6 +326,10 @@
     hasSentInitialContinuousLocationMessage = false;
     updateContinuousLocationUI(false);
     updateLocationButtonsState();
+    if (joined) {
+      inputEl.disabled = false;
+      sendBtn.disabled = false;
+    }
     if (shouldNotify) {
       socket.emit('message', {
         user: userName,
@@ -162,6 +355,9 @@
     isContinuousLocationSharing = true;
     updateContinuousLocationUI(true);
     updateLocationButtonsState();
+    inputEl.disabled = false;
+    sendBtn.disabled = false;
+    inputEl.focus();
 
     const handlePosition = (position) => {
       if (!joined || !ROOM) {
@@ -865,6 +1061,9 @@
       renderMessages(mergedMessages);
       joinModal.classList.add('hidden');
       appContent.classList.remove('hidden');
+      ensureLiveMapReady();
+      refreshLiveMapSize();
+      rebuildLiveMapFromMessages(mergedMessages);
       passwordInput.value = '';
       setInteractionEnabled(true);
       refreshCallButtons();
@@ -883,6 +1082,7 @@
       stopContinuousLocationShare({ notify: shouldNotify });
     }
     joined = false;
+    clearLiveMapMarkers();
     setInteractionEnabled(false);
     refreshCallButtons();
     renderMessages([]);
@@ -1436,6 +1636,9 @@
     const built = createMessageElement(message, { previousUser });
     if (!built) return;
     messagesEl.appendChild(built.element);
+    if (built.persisted && built.persisted.location) {
+      upsertLiveMapMarker(built.persisted, { focus: true, announce: true });
+    }
     if (persist && ROOM) {
       appendLocalMessage(ROOM, built.persisted);
     }
@@ -1471,6 +1674,7 @@
       previousUser = typeof message.user === 'string' ? message.user : null;
     });
     messagesEl.appendChild(fragment);
+    rebuildLiveMapFromMessages(messages);
     hideNewMessagesButton();
     shouldAutoScroll = true;
     scheduleMessagesScrollToBottom({ force: true });

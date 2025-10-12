@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#2196f3" />
   <link rel="manifest" href="manifest.json">
   <title>Kのチャット</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-o9N1j7kGStb6f7GbJ8f8zBT3DgZ8hE1XgBM7+4p3pFk=" crossorigin="" />
   <link rel="stylesheet" href="/public/styles.css">
 </head>
 <body>
@@ -90,6 +91,13 @@
             <button id="send" type="button">送信</button>
           </div>
         </section>
+        <section id="liveMapPanel" aria-label="ライブ位置情報">
+          <div class="live-map-header">
+            <h2>ライブマップ</h2>
+            <p id="liveMapStatus" class="live-map-status" aria-live="polite">ルームに参加すると位置情報が表示されます。</p>
+          </div>
+          <div id="liveMap" role="img" aria-label="共有された最新の位置情報を表示する地図"></div>
+        </section>
       </div>
     </section>
 
@@ -166,6 +174,7 @@
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-o9N1j7kGStb6f7GbJ8f8zBT3DgZ8hE1XgBM7+4p3pFk=" crossorigin=""></script>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

@@ -634,6 +634,51 @@ main.hidden {
   box-shadow: none;
 }
 
+#liveMapPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+  padding: 1rem;
+  border: 1px solid var(--surface-outline);
+}
+
+.live-map-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.live-map-header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.live-map-status {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+#liveMap {
+  width: 100%;
+  height: 320px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--surface-subtle);
+  border: 1px solid var(--surface-outline);
+}
+
+#liveMapPanel.is-empty #liveMap {
+  opacity: 0.85;
+}
+
+#liveMapPanel .leaflet-control-attribution {
+  font-size: 0.7rem;
+}
+
 #callControls {
   padding: 1.25rem 1.5rem;
   background: var(--surface);
@@ -992,5 +1037,13 @@ main.hidden {
 
   #controls button {
     width: 100%;
+  }
+
+  #liveMapPanel {
+    padding: 0.85rem;
+  }
+
+  #liveMap {
+    height: 260px;
   }
 }
