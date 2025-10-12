@@ -15,6 +15,11 @@
   const sendBtn = document.getElementById('send');
   const shareLocationBtn = document.getElementById('shareLocation');
   const toggleLocationShareBtn = document.getElementById('toggleLocationShare');
+  const toggleLocationShareLabel = (() => {
+    if (!toggleLocationShareBtn) return null;
+    const spans = toggleLocationShareBtn.querySelectorAll('span');
+    return spans.length > 1 ? spans[1] : null;
+  })();
   const startCallBtn = document.getElementById('startCall');
   const endCallBtn = document.getElementById('endCall');
   const participantListEl = document.getElementById('participantList');
@@ -91,6 +96,120 @@
   let typingEmitTimer = null;
   let typingEmitCooldown = false;
   let themePreference = 'system';
+  let locationWatchId = null;
+  let isContinuousLocationSharing = false;
+  let lastContinuousLocationUpdate = 0;
+  let hasSentInitialContinuousLocationMessage = false;
+  const CONTINUOUS_LOCATION_MIN_INTERVAL = 15000;
+
+  function updateContinuousLocationUI(active) {
+    if (!toggleLocationShareBtn) return;
+    toggleLocationShareBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    if (toggleLocationShareLabel) {
+      toggleLocationShareLabel.textContent = active ? '位置共有を停止' : '位置共有を開始';
+    }
+  }
+
+  function updateLocationButtonsState() {
+    const canShare = joined && ROOM;
+    if (shareLocationBtn) {
+      shareLocationBtn.disabled = !canShare || isContinuousLocationSharing;
+    }
+    if (toggleLocationShareBtn) {
+      toggleLocationShareBtn.disabled = !canShare;
+    }
+  }
+
+  function stopContinuousLocationShare({ notify = true } = {}) {
+    const hadWatch = locationWatchId !== null;
+    if (hadWatch && navigator.geolocation && typeof navigator.geolocation.clearWatch === 'function') {
+      try {
+        navigator.geolocation.clearWatch(locationWatchId);
+      } catch (error) {
+        console.warn('Failed to clear geolocation watch:', error);
+      }
+    }
+    locationWatchId = null;
+    const wasSharing = isContinuousLocationSharing;
+    isContinuousLocationSharing = false;
+    lastContinuousLocationUpdate = 0;
+    const shouldNotify = notify && wasSharing && joined && ROOM && hasSentInitialContinuousLocationMessage;
+    hasSentInitialContinuousLocationMessage = false;
+    updateContinuousLocationUI(false);
+    updateLocationButtonsState();
+    if (shouldNotify) {
+      socket.emit('message', {
+        user: userName,
+        room: ROOM,
+        icon: userIcon || null,
+        text: '常時位置情報の共有を停止しました。',
+      });
+    }
+  }
+
+  function startContinuousLocationShare() {
+    if (!joined || !ROOM) {
+      alert('ルームに参加してから常時位置情報を共有してください。');
+      return;
+    }
+    if (!navigator.geolocation || typeof navigator.geolocation.watchPosition !== 'function') {
+      alert('お使いのブラウザでは常時位置情報を利用できません。');
+      return;
+    }
+
+    hasSentInitialContinuousLocationMessage = false;
+    lastContinuousLocationUpdate = 0;
+    isContinuousLocationSharing = true;
+    updateContinuousLocationUI(true);
+    updateLocationButtonsState();
+
+    const handlePosition = (position) => {
+      if (!joined || !ROOM) {
+        const shouldNotify = hasSentInitialContinuousLocationMessage;
+        stopContinuousLocationShare({ notify: shouldNotify });
+        return;
+      }
+      const { coords } = position || {};
+      const latitude = coords && typeof coords.latitude === 'number' ? coords.latitude : null;
+      const longitude = coords && typeof coords.longitude === 'number' ? coords.longitude : null;
+      if (latitude === null || longitude === null) {
+        return;
+      }
+      const now = Date.now();
+      if (hasSentInitialContinuousLocationMessage && now - lastContinuousLocationUpdate < CONTINUOUS_LOCATION_MIN_INTERVAL) {
+        return;
+      }
+      lastContinuousLocationUpdate = now;
+      const messageText = hasSentInitialContinuousLocationMessage
+        ? '常時位置情報を更新しました。'
+        : '常時位置情報の共有を開始しました。';
+      socket.emit('message', {
+        user: userName,
+        room: ROOM,
+        icon: userIcon || null,
+        text: messageText,
+        location: { latitude, longitude },
+      });
+      hasSentInitialContinuousLocationMessage = true;
+    };
+
+    const handleError = (error) => {
+      alert('常時位置情報を取得できませんでした: ' + (error && error.message ? error.message : '不明なエラー'));
+      const shouldNotify = hasSentInitialContinuousLocationMessage;
+      stopContinuousLocationShare({ notify: shouldNotify });
+    };
+
+    try {
+      locationWatchId = navigator.geolocation.watchPosition(handlePosition, handleError, {
+        enableHighAccuracy: true,
+        maximumAge: 10000,
+        timeout: 20000,
+      });
+    } catch (error) {
+      alert('常時位置情報の共有を開始できませんでした: ' + (error && error.message ? error.message : '不明なエラー'));
+      stopContinuousLocationShare({ notify: false });
+    }
+  }
 
   function persistUserIcon(icon) {
     try {
@@ -431,7 +550,16 @@
   function setInteractionEnabled(enabled) {
     inputEl.disabled = !enabled;
     sendBtn.disabled = !enabled;
-    shareLocationBtn.disabled = !enabled;
+    if (!enabled) {
+      if (shareLocationBtn) {
+        shareLocationBtn.disabled = true;
+      }
+      if (toggleLocationShareBtn) {
+        toggleLocationShareBtn.disabled = true;
+      }
+    } else {
+      updateLocationButtonsState();
+    }
     startCallBtn.disabled = !enabled || inCall;
     if (!enabled) {
       endCallBtn.disabled = true;
@@ -749,6 +877,10 @@
     const previousRoom = ROOM;
     if (inCall) {
       endCall();
+    }
+    if (isContinuousLocationSharing || locationWatchId !== null) {
+      const shouldNotify = hasSentInitialContinuousLocationMessage;
+      stopContinuousLocationShare({ notify: shouldNotify });
     }
     joined = false;
     setInteractionEnabled(false);
@@ -1874,6 +2006,18 @@
       }
     );
   });
+
+  if (toggleLocationShareBtn) {
+    toggleLocationShareBtn.addEventListener('click', () => {
+      toggleActionsMenu(false);
+      if (isContinuousLocationSharing) {
+        const shouldNotify = hasSentInitialContinuousLocationMessage;
+        stopContinuousLocationShare({ notify: shouldNotify });
+      } else {
+        startContinuousLocationShare();
+      }
+    });
+  }
 
   // ---------- WebRTC VOICE CALL -----------
   let localStream = null;
