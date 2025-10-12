@@ -10,9 +10,11 @@
   const socket = io();
   let ROOM = null;
   const messagesEl = document.getElementById('messages');
+  const chatScrollRegion = document.getElementById('chatScrollRegion');
   const inputEl = document.getElementById('input');
   const sendBtn = document.getElementById('send');
   const shareLocationBtn = document.getElementById('shareLocation');
+  const toggleLocationShareBtn = document.getElementById('toggleLocationShare');
   const startCallBtn = document.getElementById('startCall');
   const endCallBtn = document.getElementById('endCall');
   const participantListEl = document.getElementById('participantList');
@@ -30,9 +32,18 @@
   const joinError = document.getElementById('joinError');
   const createRoomBtn = document.getElementById('createRoomButton');
   const createRoomMessage = document.getElementById('createRoomMessage');
+  const roomUsersPanel = document.getElementById('roomUsers');
   const roomUserListEl = document.getElementById('roomUserList');
   const openAdminBtn = document.getElementById('openAdmin');
   const refreshAppBtn = document.getElementById('refreshApp');
+  const themeToggleBtn = document.getElementById('themeToggle');
+  const sidebarToggleBtn = document.getElementById('sidebarToggle');
+  const closeSidebarBtn = document.getElementById('closeSidebar');
+  const moreActionsBtn = document.getElementById('moreActions');
+  const quickActionsMenu = document.getElementById('quickActionsMenu');
+  const newMessagesButton = document.getElementById('newMessagesButton');
+  const typingIndicatorEl = document.getElementById('typingIndicator');
+  const connectionBanner = document.getElementById('connectionBanner');
   const adminModal = document.getElementById('adminModal');
   const adminCloseBtn = document.getElementById('closeAdmin');
   const adminLoginSection = document.getElementById('adminLoginSection');
@@ -47,6 +58,8 @@
   const leaveRoomBtn = document.getElementById('leaveRoomBtn');
 
   const LOCAL_MESSAGES_PREFIX = 'chat-messages:';
+  const THEME_STORAGE_KEY = 'chat-theme';
+  const prefersDarkMedia = window.matchMedia('(prefers-color-scheme: dark)');
 
   let availableRooms = [];
   let adminToken = null;
@@ -70,6 +83,14 @@
   let iconStatusTimer = null;
   let currentRoomUsers = [];
   let latestCallParticipants = [];
+  const SCROLL_ANCHOR_THRESHOLD = 48;
+  let shouldAutoScroll = true;
+  let actionsMenuOpen = false;
+  let typingUsers = new Map();
+  let typingIndicatorTimeout = null;
+  let typingEmitTimer = null;
+  let typingEmitCooldown = false;
+  let themePreference = 'system';
 
   function persistUserIcon(icon) {
     try {
@@ -80,6 +101,172 @@
       }
     } catch (err) {
       console.warn('Failed to persist user icon to localStorage:', err);
+    }
+  }
+
+  function setSidebarVisibility(visible) {
+    if (!roomUsersPanel) return;
+    const next = Boolean(visible);
+    roomUsersPanel.setAttribute('data-visible', next ? 'true' : 'false');
+    if (sidebarToggleBtn) {
+      sidebarToggleBtn.setAttribute('aria-expanded', String(next));
+    }
+  }
+
+  function toggleActionsMenu(open) {
+    const next = typeof open === 'boolean' ? open : !actionsMenuOpen;
+    actionsMenuOpen = next;
+    if (quickActionsMenu) {
+      quickActionsMenu.setAttribute('aria-hidden', next ? 'false' : 'true');
+    }
+    if (moreActionsBtn) {
+      moreActionsBtn.setAttribute('aria-expanded', String(next));
+    }
+  }
+
+  function handleGlobalClick(event) {
+    if (!actionsMenuOpen) return;
+    if (!quickActionsMenu || !moreActionsBtn) return;
+    if (quickActionsMenu.contains(event.target) || moreActionsBtn.contains(event.target)) {
+      return;
+    }
+    toggleActionsMenu(false);
+  }
+
+  function handleGlobalKeydown(event) {
+    if (event.key === 'Escape' && actionsMenuOpen) {
+      toggleActionsMenu(false);
+    }
+  }
+
+  function setConnectionStatus(status) {
+    if (!connectionBanner) return;
+    connectionBanner.classList.remove('is-offline', 'is-reconnecting');
+    let message = '';
+    switch (status) {
+      case 'online':
+        message = 'オンライン';
+        break;
+      case 'reconnecting':
+        message = '再接続中…';
+        connectionBanner.classList.add('is-reconnecting');
+        break;
+      case 'offline':
+        message = 'オフライン - 接続を確認してください';
+        connectionBanner.classList.add('is-offline');
+        break;
+      default:
+        message = '';
+    }
+    connectionBanner.textContent = message;
+  }
+
+  function isNearBottom() {
+    if (!chatScrollRegion) return true;
+    return (chatScrollRegion.scrollTop + chatScrollRegion.clientHeight) >= (chatScrollRegion.scrollHeight - SCROLL_ANCHOR_THRESHOLD);
+  }
+
+  function hideNewMessagesButton() {
+    if (newMessagesButton) {
+      newMessagesButton.classList.remove('visible');
+    }
+  }
+
+  function showNewMessagesButton() {
+    if (newMessagesButton) {
+      newMessagesButton.classList.add('visible');
+    }
+  }
+
+  function registerTypingUser(user) {
+    if (!user || user === userName) {
+      return;
+    }
+    typingUsers.set(user, { name: user, expires: Date.now() + 6000 });
+    updateTypingIndicator();
+    if (typingIndicatorTimeout) {
+      clearTimeout(typingIndicatorTimeout);
+    }
+    typingIndicatorTimeout = setTimeout(() => {
+      pruneTypingUsers();
+      updateTypingIndicator();
+    }, 6500);
+  }
+
+  function pruneTypingUsers() {
+    const now = Date.now();
+    let changed = false;
+    typingUsers.forEach((value, key) => {
+      if (!value || value.expires < now) {
+        typingUsers.delete(key);
+        changed = true;
+      }
+    });
+    return changed;
+  }
+
+  function updateTypingIndicator() {
+    if (!typingIndicatorEl) return;
+    pruneTypingUsers();
+    const names = Array.from(typingUsers.values()).map((entry) => entry.name).filter(Boolean);
+    if (names.length === 0) {
+      typingIndicatorEl.textContent = '';
+      return;
+    }
+    if (names.length === 1) {
+      typingIndicatorEl.textContent = `${names[0]}さんが入力中…`;
+      return;
+    }
+    const preview = names.slice(0, 2).join('、');
+    const suffix = names.length > 2 ? `ほか${names.length - 2}人` : '';
+    typingIndicatorEl.textContent = suffix ? `${preview}、${suffix}が入力中…` : `${preview}が入力中…`;
+  }
+
+  function emitTyping() {
+    if (!joined || !ROOM || typingEmitCooldown) {
+      return;
+    }
+    typingEmitCooldown = true;
+    socket.emit('typing', { room: ROOM });
+    if (typingEmitTimer) {
+      clearTimeout(typingEmitTimer);
+    }
+    typingEmitTimer = setTimeout(() => {
+      typingEmitCooldown = false;
+    }, 2000);
+  }
+
+  function resolveThemeValue(preference) {
+    if (preference === 'dark' || preference === 'light') {
+      return preference;
+    }
+    return prefersDarkMedia.matches ? 'dark' : 'light';
+  }
+
+  function updateThemeToggleButton(preference) {
+    if (!themeToggleBtn) return;
+    const effective = resolveThemeValue(preference);
+    const label = preference === 'system' ? 'システム' : effective === 'dark' ? 'ダーク' : 'ライト';
+    const icon = effective === 'dark' ? '🌙' : '🌞';
+    themeToggleBtn.setAttribute('data-mode', preference);
+    themeToggleBtn.setAttribute('aria-pressed', effective === 'dark' ? 'true' : 'false');
+    themeToggleBtn.setAttribute('aria-label', `テーマ: ${label} (クリックで切り替え / Shift+クリックでシステム)`);
+    themeToggleBtn.title = 'クリックでライト/ダークを切り替え・Shift+クリックでシステム設定に戻す';
+    themeToggleBtn.innerHTML = `<span aria-hidden="true">${icon}</span><span class="label">${label}</span>`;
+  }
+
+  function applyTheme(preference, { persist = true } = {}) {
+    themePreference = preference;
+    const effective = resolveThemeValue(preference);
+    document.documentElement.setAttribute('data-theme', effective);
+    updateThemeToggleButton(preference);
+    if (!persist) {
+      return;
+    }
+    if (preference === 'system') {
+      localStorage.removeItem(THEME_STORAGE_KEY);
+    } else {
+      localStorage.setItem(THEME_STORAGE_KEY, preference);
     }
   }
 
@@ -569,6 +756,10 @@
     renderMessages([]);
     renderParticipants([]);
     renderRoomUsers([]);
+    typingUsers.clear();
+    updateTypingIndicator();
+    hideNewMessagesButton();
+    shouldAutoScroll = true;
     setIconStatus('');
     appContent.classList.add('hidden');
     joinModal.classList.remove('hidden');
@@ -696,6 +887,83 @@
 
   fetchRooms();
   requestNotificationPermission();
+
+  const storedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+  const initialTheme = storedTheme === 'dark' || storedTheme === 'light' ? storedTheme : 'system';
+  applyTheme(initialTheme, { persist: false });
+
+  if (prefersDarkMedia) {
+    const handleThemeMediaChange = () => {
+      if (themePreference === 'system') {
+        applyTheme('system', { persist: false });
+      }
+    };
+    if (typeof prefersDarkMedia.addEventListener === 'function') {
+      prefersDarkMedia.addEventListener('change', handleThemeMediaChange);
+    } else if (typeof prefersDarkMedia.addListener === 'function') {
+      prefersDarkMedia.addListener(handleThemeMediaChange);
+    }
+  }
+
+  if (themeToggleBtn) {
+    themeToggleBtn.addEventListener('click', (event) => {
+      if (event.shiftKey) {
+        applyTheme('system');
+        return;
+      }
+      const effective = resolveThemeValue(themePreference);
+      const next = effective === 'dark' ? 'light' : 'dark';
+      applyTheme(next);
+    });
+  }
+
+  setSidebarVisibility(window.innerWidth > 1024);
+
+  window.addEventListener('resize', () => {
+    if (window.innerWidth > 1024) {
+      setSidebarVisibility(true);
+    } else {
+      setSidebarVisibility(false);
+    }
+  });
+
+  if (sidebarToggleBtn) {
+    sidebarToggleBtn.addEventListener('click', () => {
+      const nextVisible = roomUsersPanel && roomUsersPanel.getAttribute('data-visible') !== 'true';
+      setSidebarVisibility(nextVisible);
+    });
+  }
+
+  if (closeSidebarBtn) {
+    closeSidebarBtn.addEventListener('click', () => {
+      setSidebarVisibility(false);
+    });
+  }
+
+  if (chatScrollRegion) {
+    chatScrollRegion.addEventListener('scroll', () => {
+      shouldAutoScroll = isNearBottom();
+      if (shouldAutoScroll) {
+        hideNewMessagesButton();
+      }
+    });
+  }
+
+  if (newMessagesButton) {
+    newMessagesButton.addEventListener('click', () => {
+      shouldAutoScroll = true;
+      scheduleMessagesScrollToBottom({ force: true });
+    });
+  }
+
+  if (moreActionsBtn) {
+    moreActionsBtn.addEventListener('click', () => {
+      toggleActionsMenu();
+    });
+  }
+
+  document.addEventListener('click', handleGlobalClick);
+  document.addEventListener('keydown', handleGlobalKeydown);
 
   if (activeSession) {
     setTimeout(() => {
@@ -902,16 +1170,22 @@
     });
   }
 
-  function scheduleMessagesScrollToBottom() {
+  function scheduleMessagesScrollToBottom({ force = false } = {}) {
+    if (!chatScrollRegion) return;
+    if (!force && !shouldAutoScroll) {
+      return;
+    }
     if (pendingScrollToBottom) return;
     pendingScrollToBottom = true;
     requestAnimationFrame(() => {
-      messagesEl.scrollTop = messagesEl.scrollHeight;
+      chatScrollRegion.scrollTop = chatScrollRegion.scrollHeight;
       pendingScrollToBottom = false;
+      shouldAutoScroll = true;
+      hideNewMessagesButton();
     });
   }
 
-  function createMessageElement(message) {
+  function createMessageElement(message, { previousUser } = {}) {
     if (!message || typeof message !== 'object') return null;
     const rawUser = typeof message.user === 'string' ? message.user : '';
     const sanitizedText = typeof message.text === 'string' ? message.text : '';
@@ -925,44 +1199,72 @@
       : null;
     const location = latitude !== null && longitude !== null ? { latitude, longitude } : null;
     const timestampValue = typeof message.time === 'number' ? message.time : Date.now();
-    const timestamp = new Date(timestampValue).toLocaleTimeString();
+    const timestampDate = new Date(timestampValue);
+    const timestamp = timestampDate.toLocaleTimeString();
 
     const li = document.createElement('li');
+    li.classList.add('message');
+    li.dataset.user = rawUser;
+    li.dataset.time = String(timestampValue);
 
     if (rawUser === 'system') {
-      li.classList.add('system');
-      const content = document.createElement('div');
-      content.className = 'content';
+      li.classList.add('message--system');
+      const bubble = document.createElement('div');
+      bubble.className = 'message-bubble';
       const meta = document.createElement('div');
       meta.className = 'meta';
-      meta.textContent = `[${timestamp}] system`;
-      const textEl = document.createElement('p');
-      textEl.className = 'text';
-      textEl.textContent = sanitizedText;
-      content.appendChild(meta);
-      content.appendChild(textEl);
-      li.appendChild(content);
+      const timeEl = document.createElement('time');
+      timeEl.dateTime = timestampDate.toISOString();
+      timeEl.textContent = timestamp;
+      meta.appendChild(timeEl);
+      bubble.appendChild(meta);
+      if (sanitizedText) {
+        const textEl = document.createElement('p');
+        textEl.className = 'text';
+        textEl.textContent = sanitizedText;
+        bubble.appendChild(textEl);
+      }
+      li.appendChild(bubble);
     } else {
       const displayUser = rawUser || 'ゲスト';
+      const isSelf = rawUser && rawUser === userName;
+      li.classList.add(isSelf ? 'message--self' : 'message--other');
+
+      if (previousUser && previousUser === rawUser) {
+        li.classList.add('message--continued', 'message--condensed');
+      }
+
       const avatar = document.createElement('div');
       avatar.className = 'avatar';
       const img = document.createElement('img');
       img.alt = `${displayUser}のアイコン`;
-      img.src = icon || 'icon-192.png';
+      img.src = icon || DEFAULT_ICON_SRC;
       avatar.appendChild(img);
 
-      const content = document.createElement('div');
-      content.className = 'content';
+      const bubble = document.createElement('div');
+      bubble.className = 'message-bubble';
+
       const meta = document.createElement('div');
       meta.className = 'meta';
-      meta.textContent = `${displayUser} ・ ${timestamp}`;
-      content.appendChild(meta);
+      const author = document.createElement('span');
+      author.className = 'author';
+      author.textContent = displayUser;
+      const separator = document.createElement('span');
+      separator.className = 'separator';
+      separator.textContent = '・';
+      const timeEl = document.createElement('time');
+      timeEl.dateTime = timestampDate.toISOString();
+      timeEl.textContent = timestamp;
+      meta.appendChild(author);
+      meta.appendChild(separator);
+      meta.appendChild(timeEl);
+      bubble.appendChild(meta);
 
       if (sanitizedText) {
         const textEl = document.createElement('p');
         textEl.className = 'text';
         textEl.textContent = sanitizedText;
-        content.appendChild(textEl);
+        bubble.appendChild(textEl);
       }
 
       if (location) {
@@ -971,12 +1273,17 @@
         link.href = `https://www.google.com/maps?q=${location.latitude},${location.longitude}`;
         link.target = '_blank';
         link.rel = 'noopener';
-        link.textContent = '共有された位置情報を表示';
-        content.appendChild(link);
+        link.textContent = '地図で確認する';
+        bubble.appendChild(link);
       }
 
-      li.appendChild(avatar);
-      li.appendChild(content);
+      if (isSelf) {
+        li.appendChild(bubble);
+        li.appendChild(avatar);
+      } else {
+        li.appendChild(avatar);
+        li.appendChild(bubble);
+      }
     }
 
     return {
@@ -992,31 +1299,49 @@
   }
 
   function addMessage(message, { persist = true } = {}) {
-    const built = createMessageElement(message);
+    const previousUser = messagesEl && messagesEl.lastElementChild ? messagesEl.lastElementChild.dataset.user : null;
+    const wasNearBottom = isNearBottom();
+    const built = createMessageElement(message, { previousUser });
     if (!built) return;
     messagesEl.appendChild(built.element);
-    scheduleMessagesScrollToBottom();
-
     if (persist && ROOM) {
       appendLocalMessage(ROOM, built.persisted);
+    }
+
+    if (built.persisted.user) {
+      typingUsers.delete(built.persisted.user);
+      updateTypingIndicator();
+    }
+
+    if (wasNearBottom) {
+      shouldAutoScroll = true;
+      scheduleMessagesScrollToBottom({ force: true });
+    } else {
+      shouldAutoScroll = false;
+      showNewMessagesButton();
     }
   }
 
   function renderMessages(messages) {
     messagesEl.innerHTML = '';
     if (!Array.isArray(messages) || messages.length === 0) {
-      scheduleMessagesScrollToBottom();
+      hideNewMessagesButton();
+      scheduleMessagesScrollToBottom({ force: true });
       return;
     }
 
     const fragment = document.createDocumentFragment();
+    let previousUser = null;
     messages.forEach((message) => {
-      const built = createMessageElement(message);
+      const built = createMessageElement(message, { previousUser });
       if (!built) return;
       fragment.appendChild(built.element);
+      previousUser = typeof message.user === 'string' ? message.user : null;
     });
     messagesEl.appendChild(fragment);
-    scheduleMessagesScrollToBottom();
+    hideNewMessagesButton();
+    shouldAutoScroll = true;
+    scheduleMessagesScrollToBottom({ force: true });
   }
 
   function renderRoomOptionsList(rooms) {
@@ -1379,6 +1704,11 @@
     }
   });
 
+  inputEl.addEventListener('input', () => {
+    if (!joined || !ROOM) return;
+    emitTyping();
+  });
+
   inputEl.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !inputEl.disabled) {
       sendBtn.click();
@@ -1396,6 +1726,41 @@
   socket.on('system', (msg) => {
     addMessage({ user: 'system', text: msg, time: Date.now() }, { persist: false });
   });
+
+  socket.on('typing', (payload = {}) => {
+    if (!payload || typeof payload !== 'object') return;
+    if (typeof payload.user === 'string') {
+      registerTypingUser(payload.user);
+    }
+  });
+
+  setConnectionStatus(navigator.onLine ? 'online' : 'offline');
+  window.addEventListener('online', () => setConnectionStatus('online'));
+  window.addEventListener('offline', () => setConnectionStatus('offline'));
+
+  socket.on('connect', () => {
+    setConnectionStatus('online');
+  });
+
+  socket.on('disconnect', () => {
+    setConnectionStatus(navigator.onLine ? 'reconnecting' : 'offline');
+  });
+
+  if (socket.io && socket.io.on) {
+    socket.io.on('reconnect_attempt', () => {
+      setConnectionStatus('reconnecting');
+    });
+    socket.io.on('reconnect', () => {
+      setConnectionStatus('online');
+    });
+    socket.io.on('error', () => {
+      if (!navigator.onLine) {
+        setConnectionStatus('offline');
+      } else {
+        setConnectionStatus('reconnecting');
+      }
+    });
+  }
 
   socket.on('call-participants', (participants) => {
     renderParticipants(participants);
@@ -1484,6 +1849,7 @@
       alert('お使いのブラウザでは位置情報を利用できません。');
       return;
     }
+    toggleActionsMenu(false);
     shareLocationBtn.disabled = true;
     navigator.geolocation.getCurrentPosition(
       (position) => {

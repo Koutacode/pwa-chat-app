@@ -5,11 +5,13 @@
  * consider integrating IndexedDB or background sync.
  */
 
-const CACHE_NAME = 'pwa-chat-cache-v2';
+const CACHE_NAME = 'pwa-chat-cache-v3';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
   '/app.js',
+  '/public/styles.css',
+  '/src/main.js',
   '/manifest.json',
   '/socket.io/socket.io.js',
   '/icon-192.png',

@@ -516,6 +516,19 @@ io.on('connection', (socket) => {
     io.to(room).emit('message', payload);
   });
 
+  socket.on('typing', () => {
+    const profile = userProfiles.get(socket.id);
+    const room = profile?.room;
+    if (!room) {
+      return;
+    }
+    const sockets = roomSockets.get(room);
+    if (!sockets || !sockets.has(socket.id)) {
+      return;
+    }
+    socket.to(room).emit('typing', { user: profile?.user || 'ゲスト' });
+  });
+
   // Signaling messages for WebRTC; forward to all peers in the room
   socket.on('webrtc', ({ room, data } = {}) => {
     const profile = userProfiles.get(socket.id);
