@@ -499,6 +499,16 @@ main.hidden {
   text-decoration: underline;
 }
 
+.message--self .location-link {
+  color: var(--text-inverse);
+}
+
+.message--self .location-link:hover,
+.message--self .location-link:focus-visible {
+  color: var(--text-inverse);
+  text-decoration: underline;
+}
+
 .message--self {
   justify-items: end;
   grid-template-columns: minmax(0, 1fr) auto;
