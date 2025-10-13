@@ -5,7 +5,7 @@
  * consider integrating IndexedDB or background sync.
  */
 
-const CACHE_NAME = 'pwa-chat-cache-v3';
+const CACHE_NAME = 'pwa-chat-cache-v4';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -15,9 +15,9 @@ const STATIC_ASSETS = [
   '/manifest.json',
   '/socket.io/socket.io.js',
   '/icon-192.png',
-  '/icon-512.png'
-    'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
-    'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
+  '/icon-512.png',
+  '/public/vendor/leaflet.css',
+  '/public/vendor/leaflet.js',
 ];
 
 self.addEventListener('install', (event) => {
