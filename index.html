@@ -6,11 +6,10 @@
   <meta name="theme-color" content="#2196f3" />
   <link rel="manifest" href="manifest.json">
   <title>Kのチャット</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-o9N1j7kGStb6f7GbJ8f8zBT3DgZ8hE1XgBM7+4p3pFk=" crossorigin="" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet" />
   <link rel="stylesheet" href="/public/styles.css">
 </head>
-<body>
-  <header>
+<body>  <header>
     <div class="header-inner">
       <div class="header-brand">
         <button id="sidebarToggle" type="button" class="header-icon-button" aria-label="ユーザー一覧を開閉" aria-expanded="false">
@@ -173,8 +172,6 @@
     </div>
   </div>
 
-  <script src="/socket.io/socket.io.js"></script>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-o9N1j7kGStb6f7GbJ8f8zBT3DgZ8hE1XgBM7+4p3pFk=" crossorigin=""></script>
-  <script type="module" src="/src/main.js"></script>
-</body>
-</html>
+      <script src="/socket.io/socket.io.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script type="module" src="/src/main.js"></script>
