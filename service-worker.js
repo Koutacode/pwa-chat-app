@@ -16,6 +16,8 @@ const STATIC_ASSETS = [
   '/socket.io/socket.io.js',
   '/icon-192.png',
   '/icon-512.png'
+    'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
+    'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
 ];
 
 self.addEventListener('install', (event) => {
