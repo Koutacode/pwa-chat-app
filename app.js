@@ -109,15 +109,15 @@
   let liveMap = null;
   let liveMapMarkersLayer = null;
   const liveMapMarkers = new Map();
-  llet pendingLiveMapMessages = null;
+  let pendingLiveMapMessages = null;
 
   function setLiveMapStatus(message) {
     if (!liveMapStatusEl) return;
   
 
   liveMapStatusEl.textContent = message || '';
-  }i
-    function  loadLeafletScript() {
+  }
+    funcion  loadLeafletScript() {
   return new Promise((resolve, reject) => {
         if (typeof window.L !== 'undefined') {
       resolve();
