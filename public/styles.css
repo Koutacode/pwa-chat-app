@@ -444,9 +444,11 @@ main.hidden {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: end;
-  gap: 0.6rem;
+  gap: 0.6
+color: var(--text);
 }
 
+  
 .message .avatar {
   width: 38px;
   height: 38px;
