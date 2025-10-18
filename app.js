@@ -109,7 +109,7 @@
   let liveMap = null;
   let liveMapMarkersLayer = null;
   const liveMapMarkers = new Map();
-  letpendingLiveMapMessages = null;
+  llet pendingLiveMapMessages = null;
 
   function setLiveMapStatus(message) {
     if (!liveMapStatusEl) return;
@@ -119,7 +119,7 @@
   }i
     function  loadLeafletScript() {
   return new Promise((resolve, reject) => {
-    if (typeof window.L !== 'undefined') {
+        if (typeof window.L !== 'undefined') {
       resolve();
       return;
     }
