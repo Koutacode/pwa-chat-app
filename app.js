@@ -109,20 +109,47 @@
   let liveMap = null;
   let liveMapMarkersLayer = null;
   const liveMapMarkers = new Map();
-  let pendingLiveMapMessages = null;
+  letpendingLiveMapMessages = null;
 
   function setLiveMapStatus(message) {
     if (!liveMapStatusEl) return;
-    liveMapStatusEl.textContent = message || '';
-  }
+  
 
-  function ensureLiveMapReady() {
+  liveMapStatusEl.textContent = message || '';
+  }i
+    function  loadLeafletScript() {
+  return new Promise((resolve, reject) => {
+    if (typeof window.L !== 'undefined') {
+      resolve();
+      return;
+    }
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/leaflet@1.9.3/dist/leaflet.js';
+    script.onload = resolve;
+    script.onerror = reject;
+    document.head.appendChild(script);
+ 
+  });
+}
+
+ async  function ensureLiveMapReady() {
     if (!liveMapContainer) {
+       return false;
+    }
+ if (typeof window.L === 'undefined') {
+    // Try to load Leaflet from CDN if it wasn't loaded.
+    setLiveMapStatus('マップを読み込んでいます...');
+    try {
+      await loadLeafletScript();
+      // Retry initialization after script loads.
+      return ensureLiveMapReady();
+    } catch (e) {
+      setLiveMapStatus(
+        'マップを読み込めませんでした。ネットワーク接続を確認してページを再読込してください。',
+      );
       return false;
     }
-    if (typeof window.L === 'undefined') {
-      setLiveMapStatus('マップを読み込めませんでした。ネットワーク接続を確認してページを再読み込みしてください。');
-      return false;
+  }
     }
     let initialised = false;
     if (!liveMap) {
