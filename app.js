@@ -113,44 +113,43 @@
 
   function setLiveMapStatus(message) {
     if (!liveMapStatusEl) return;
-  
-
-  liveMapStatusEl.textContent = message || '';
+    liveMapStatusEl.textContent = message || '';
   }
-    funcion  loadLeafletScript() {
-  return new Promise((resolve, reject) => {
-        if (typeof window.L !== 'undefined') {
-      resolve();
-      return;
-    }
-    const script = document.createElement('script');
-    script.src = 'https://unpkg.com/leaflet@1.9.3/dist/leaflet.js';
-    script.onload = resolve;
-    script.onerror = reject;
-    document.head.appendChild(script);
- 
-  });
-}
 
- async  function ensureLiveMapReady() {
+  function loadLeafletScript() {
+    return new Promise((resolve, reject) => {
+      if (typeof window.L !== 'undefined') {
+        resolve();
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = 'https://unpkg.com/leaflet@1.9.3/dist/leaflet.js';
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+  }
+
+  async function ensureLiveMapReady() {
     if (!liveMapContainer) {
-       return false;
-    }
- if (typeof window.L === 'undefined') {
-    // Try to load Leaflet from CDN if it wasn't loaded.
-    setLiveMapStatus('マップを読み込んでいます...');
-    try {
-      await loadLeafletScript();
-      // Retry initialization after script loads.
-      return ensureLiveMapReady();
-    } catch (e) {
-      setLiveMapStatus(
-        'マップを読み込めませんでした。ネットワーク接続を確認してページを再読込してください。',
-      );
       return false;
     }
-  }
+
+    if (typeof window.L === 'undefined') {
+      // Try to load Leaflet from CDN if it wasn't loaded.
+      setLiveMapStatus('マップを読み込んでいます...');
+      try {
+        await loadLeafletScript();
+        // Retry initialization after script loads.
+        return ensureLiveMapReady();
+      } catch (e) {
+        setLiveMapStatus(
+          'マップを読み込めませんでした。ネットワーク接続を確認してページを再読込してください。',
+        );
+        return false;
+      }
     }
+
     let initialised = false;
     if (!liveMap) {
       try {
@@ -165,7 +164,11 @@
           maxZoom: 19,
         }).addTo(liveMap);
         refreshLiveMapSize();
-        setLiveMapStatus(joined ? '位置情報が共有されるとここに表示されます。' : 'ルームに参加すると位置情報が表示されます。');
+        setLiveMapStatus(
+          joined
+            ? '位置情報が共有されるとここに表示されます。'
+            : 'ルームに参加すると位置情報が表示されます。',
+        );
         initialised = true;
       } catch (error) {
         console.warn('Failed to initialise live map:', error);
@@ -175,11 +178,17 @@
         return false;
       }
     }
-    if (initialised && Array.isArray(pendingLiveMapMessages) && pendingLiveMapMessages.length > 0) {
+
+    if (
+      initialised &&
+      Array.isArray(pendingLiveMapMessages) &&
+      pendingLiveMapMessages.length > 0
+    ) {
       const messagesToReplay = pendingLiveMapMessages.slice();
       pendingLiveMapMessages = null;
       rebuildLiveMapFromMessages(messagesToReplay);
     }
+
     return Boolean(liveMap);
   }
 
