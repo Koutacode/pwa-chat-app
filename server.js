@@ -374,6 +374,30 @@ function emitRoomUsers(room) {
 io.on('connection', (socket) => {
   console.log('a user connected:', socket.id);
 
+  // Create a room within the same socket context so the directory stays in sync.
+  socket.on('create-room', (payload = {}, callback) => {
+    const roomName = sanitizeRoomName(payload.name);
+    const password = typeof payload.password === 'string' ? payload.password : '';
+
+    if (!roomName) {
+      if (typeof callback === 'function') {
+        callback({ ok: false, error: 'ルーム名を入力してください。' });
+      }
+      return;
+    }
+
+    try {
+      const created = createRoom(roomName, password);
+      if (typeof callback === 'function') {
+        callback({ ok: true, room: created, rooms: getPublicRooms() });
+      }
+    } catch (error) {
+      if (typeof callback === 'function') {
+        callback({ ok: false, error: error.message });
+      }
+    }
+  });
+
   // Join a room for group chat.
   socket.on('join', (payload = {}, maybeCallback) => {
     const callback = typeof maybeCallback === 'function' ? maybeCallback : undefined;

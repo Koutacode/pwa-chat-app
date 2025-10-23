@@ -1148,7 +1148,7 @@
     roomNameInput.focus();
   }
 
-  async function handleCreateRoom() {
+  function handleCreateRoom() {
     if (!createRoomBtn) {
       return;
     }
@@ -1178,25 +1178,17 @@
     createRoomBtn.disabled = true;
     createRoomBtn.textContent = '作成中…';
 
-    try {
-      const response = await fetch('/api/rooms', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ name: roomName, password }),
-      });
+    socket.emit('create-room', { name: roomName, password }, (data) => {
+      const restoreButtonState = () => {
+        createRoomBtn.disabled = false;
+        createRoomBtn.textContent = originalLabel;
+      };
 
-      let data = {};
-      try {
-        data = await response.json();
-      } catch (error) {
-        data = {};
-      }
-
-      if (!response.ok || !data || data.ok !== true) {
+      if (!data || data.ok !== true) {
         const message = data && data.error ? data.error : 'ルームの作成に失敗しました。';
-        throw new Error(message);
+        joinError.textContent = message;
+        restoreButtonState();
+        return;
       }
 
       renderRoomOptionsList(Array.isArray(data.rooms) ? data.rooms : []);
@@ -1206,6 +1198,7 @@
           createRoomMessage.textContent = 'ルームを作成しました。ユーザー名を入力して参加してください。';
         }
         userNameInput.focus();
+        restoreButtonState();
         return;
       }
 
@@ -1213,12 +1206,8 @@
         createRoomMessage.textContent = 'ルームを作成しました。参加しています…';
       }
       attemptJoin();
-    } catch (error) {
-      joinError.textContent = error && error.message ? error.message : 'ルームの作成に失敗しました。';
-    } finally {
-      createRoomBtn.disabled = false;
-      createRoomBtn.textContent = originalLabel;
-    }
+      restoreButtonState();
+    });
   }
 
   joinBtn.addEventListener('click', attemptJoin);
